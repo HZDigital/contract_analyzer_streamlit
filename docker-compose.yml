@@ -1,0 +1,10 @@
+services:
+  contract-analyzer:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./results:/app/results
+    environment:
+      - AZURE_OPENAI_API_KEY=c08c97c5516a4a75965d50a48da67c7f
+      - AZURE_OPENAI_ENDPOINT=https://aiwebinarservice01.openai.azure.com/
