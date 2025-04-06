@@ -1,0 +1,44 @@
+name: Trigger auto deployment for contractanalyzer
+
+# When this action will be executed
+on:
+  # Automatically trigger it when detected changes in repo
+  push:
+    branches: 
+      [ main ]
+    paths:
+    - '**'
+    - '.github/workflows/contractanalyzer-AutoDeployTrigger-ea1d8693-e52e-4b37-9561-908e8a061ef9.yml'
+
+  # Allow manual trigger 
+  workflow_dispatch:
+      
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout to the branch
+        uses: actions/checkout@v2
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.CONTRACTANALYZER_AZURE_CREDENTIALS }}
+
+      - name: Build and push container image to registry
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: ${{ github.workspace }}
+          _dockerfilePathKey_: _dockerfilePath_
+          registryUrl: hzgenaicontainerregistry.azurecr.io
+          registryUsername: ${{ secrets.CONTRACTANALYZER_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.CONTRACTANALYZER_REGISTRY_PASSWORD }}
+          containerAppName: contractanalyzer
+          resourceGroup: AIWebinarRAG01_RG
+          imageToBuild: hzgenaicontainerregistry.azurecr.io/contractanalyzer:${{ github.sha }}
+          
+            
+
+     
+
