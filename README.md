@@ -31,7 +31,7 @@ This application helps legal professionals and business users analyze contract d
 1. Clone the repository:
 
    ```bash
-   git clone [<repository-url>](https://github.com/HZDigital/contract_analyzer_streamlit.git)
+   git clone https://github.com/HZDigital/contract_analyzer_streamlit.git
    cd contract_analyzer_streamlit
    ```
 
