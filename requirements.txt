@@ -4,3 +4,4 @@ openai
 pytesseract
 pdf2image
 pillow
+pandas
