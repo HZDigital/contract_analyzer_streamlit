@@ -15,7 +15,7 @@ class AzureConfig:
     def __init__(self):
         self.api_key = os.environ.get("AZURE_OPENAI_API_KEY")
         self.azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
-        self.deployment_name = "gpt-4.1-mini"
+        self.deployment_name = "o4-mini"
         self.api_version = "2024-12-01-preview"
         self._client = None
     

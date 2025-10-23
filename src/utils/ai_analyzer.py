@@ -119,6 +119,8 @@ Analyze the following contract text and extract the following information in JSO
 3. Quantities/amounts for each product (with units if specified)
 4. Contract type or nature of the agreement
 
+If a product repeats multiple times, please insert everz single one of them as separate entry in the products list.
+
 Return the response as a valid JSON object with the following structure:
 {{
     "client_name": "string",
@@ -136,14 +138,15 @@ Return the response as a valid JSON object with the following structure:
 If any information is not clearly specified, use "Not specified" as the value.
 
 Contract Text:
-{text[:4000]}  # Limit text for efficiency
+{text}  # Limit text for efficiency
     """
     
     try:
         response = azure_config.client.chat.completions.create(
             model=azure_config.deployment_name,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1  # Lower temperature for more consistent extraction
+            temperature=1,  # Lower temperature for more consistent extraction
+            
         )
         
         # Try to parse JSON response
