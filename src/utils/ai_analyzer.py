@@ -66,7 +66,7 @@ Contract Text:
         response = azure_config.client.chat.completions.create(
             model=azure_config.deployment_name,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1  # Lower temperature for more consistent extraction
+            temperature=1  # Lower temperature for more consistent extraction
         )
         
         response_text = response.choices[0].message.content.strip()

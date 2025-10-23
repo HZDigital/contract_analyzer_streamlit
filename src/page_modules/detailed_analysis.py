@@ -102,24 +102,27 @@ def _analyze_single_file(file, result):
     with status_analysis:
         with st.spinner("Analyzing contract with AI..."):
             analysis = analyze_contract(raw_text, truncate_length)
-    
+
     status_analysis.success("✅ AI analysis complete")
     time.sleep(2)
     status_analysis.empty()
-    
+
     # Step 3: Save results
     with status_saving:
         with st.spinner("Saving analysis results..."):
-            save_analysis_result(file.name, analysis)
-    
+            # Serialize analysis to JSON string if it's a dict
+            import json
+            analysis_to_save = json.dumps(analysis, indent=2, ensure_ascii=False) if isinstance(analysis, dict) else str(analysis)
+            save_analysis_result(file.name, analysis_to_save)
+
     status_saving.success("✅ Results saved to file")
     time.sleep(2)
     status_saving.empty()
-    
+
     # Store successful analysis
     result["analysis"] = analysis
     result["success"] = True
-    
+
     return result
 
 
