@@ -6,7 +6,7 @@ import streamlit as st
 import pandas as pd
 import time
 from utils.pdf_processor import extract_text_from_pdf
-from utils.ai_analyzer import extract_client_and_products
+from utils.ai_analyzer import extract_client_and_products, group_similar_products
 from utils.file_utils import  generate_detailed_csv_download_data
 
 
@@ -48,15 +48,17 @@ def _process_bulk_files(uploaded_files):
         st.session_state.bulk_results = []
     
     st.session_state.bulk_results = []  # Reset results
+    st.session_state.consolidated_results = []  # Reset consolidated results
     
     # Progress bar
     progress_bar = st.progress(0)
     status_text = st.empty()
     
+    # Step 1: Process all files
     for i, file in enumerate(uploaded_files):
         # Update progress
         progress = (i + 1) / len(uploaded_files)
-        progress_bar.progress(progress)
+        progress_bar.progress(progress * 0.7)  # Use 70% of progress bar for file processing
         status_text.text(f"Processing {file.name}... ({i+1}/{len(uploaded_files)})")
         
         try:
@@ -93,8 +95,61 @@ def _process_bulk_files(uploaded_files):
             }
             st.session_state.bulk_results.append(result)
     
+    # Step 2: Run AI grouping for consolidated results
+    progress_bar.progress(0.7)
+    status_text.text("Analyzing products for similarities...")
+    
+    # Gather all products with client info
+    product_db = []
+    for result in st.session_state.bulk_results:
+        if result["status"] == "success" and result.get("products"):
+            for prod in result["products"]:
+                product_db.append({
+                    "product_name": prod.get("product_name", "Unknown"),
+                    "quantity": prod.get("quantity", "Not specified"),
+                    "unit": prod.get("unit", ""),
+                    "client_name": result.get("client_name", "Not detected"),
+                    "contract_type": result.get("contract_type", "Unknown"),
+                    "description": prod.get("description", "Not specified"),
+                })
+    
+    if product_db:
+        ai_result = group_similar_products(product_db)
+        
+        if "error" not in ai_result:
+            # Build consolidated rows from AI groups
+            for group in ai_result.get("groups", []):
+                product_ids = group.get("product_ids", [])
+                canonical_name = group.get("canonical_name", "Unknown Product")
+                
+                # Get unique clients for this group
+                unique_clients = {}
+                for pid in product_ids:
+                    if 0 <= pid < len(product_db):
+                        prod = product_db[pid]
+                        cname = prod["client_name"]
+                        if cname not in unique_clients:
+                            unique_clients[cname] = {
+                                "quantity": prod["quantity"],
+                                "unit": prod["unit"],
+                                "contract_type": prod["contract_type"],
+                                "product_name": prod["product_name"]
+                            }
+                
+                if len(unique_clients) >= 2:
+                    row = {"Product": canonical_name}
+                    
+                    for idx, (cname, info) in enumerate(unique_clients.items(), 1):
+                        quantity_str = f"{info['quantity']} {info['unit']}".strip()
+                        row[f"Client {idx}"] = cname
+                        row[f"Original Name {idx}"] = info["product_name"]
+                        row[f"Quantity {idx}"] = quantity_str
+                        row[f"Type {idx}"] = info["contract_type"]
+                    
+                    st.session_state.consolidated_results.append(row)
+    
     progress_bar.progress(1.0)
-    status_text.text("✅ Processing complete!")
+    status_text.text("✅ Processing and analysis complete!")
 
 
 def _display_bulk_results():
@@ -153,23 +208,33 @@ def _display_bulk_results():
             })
     
     _display_detailed_results()
-    
+
+    # --- Consolidated Order List Section ---
+    st.markdown("---")
+    st.markdown("## 🔄 Consolidated Order List")
+    st.caption("Products ordered by 2 or more different clients")
+
+    # Display pre-computed consolidated results
+    if 'consolidated_results' in st.session_state and st.session_state.consolidated_results:
+        st.dataframe(pd.DataFrame(st.session_state.consolidated_results), use_container_width=True, hide_index=True)
+        st.success(f"✅ Found {len(st.session_state.consolidated_results)} product(s) ordered by multiple clients")
+    else:
+        st.info("No products were ordered by 2 or more different clients.")
+
     # Export option
     st.markdown("### 📥 Export Results")
     st.markdown("Choose your preferred export format:")
-    
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
         st.caption("One row per product/service found")
-        if st.button("📊 Export to CSV", type="primary"):
-            detailed_csv_data = generate_detailed_csv_download_data(st.session_state.bulk_results)
-            st.download_button(
-                label="Download Detailed CSV",
-                data=detailed_csv_data,
-                file_name=f"Product_Request.csv",
-                mime="text/csv"
-            )
+        st.download_button(
+            label="Download Detailed CSV",
+            data=generate_detailed_csv_download_data(st.session_state.bulk_results),
+            file_name=f"Product_Request.csv",
+            mime="text/csv"
+        )
 
 
 def _display_detailed_results():

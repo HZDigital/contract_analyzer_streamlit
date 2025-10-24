@@ -168,3 +168,105 @@ Contract Text:
             "total_estimated_value": "Not specified",
             "error": str(e)
         }
+
+
+def group_similar_products(products_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Use AI to group similar products that might be named differently.
+    
+    Args:
+        products_list: List of product dictionaries with 'product_name', 'client_name', etc.
+        
+    Returns:
+        dict: Grouped products with AI-identified similarities
+    """
+    if not azure_config.client:
+        return {"error": "Azure OpenAI not configured"}
+    
+    if not products_list:
+        return {"groups": []}
+    
+    # Create a simplified list for AI analysis
+    products_for_ai = []
+    for idx, prod in enumerate(products_list):
+        products_for_ai.append({
+            "id": idx,
+            "product_name": prod.get("product_name", "Unknown"),
+            "client": prod.get("client_name", "Unknown")
+        })
+    
+    prompt = f"""You are analyzing product names from different client orders. Group products ONLY if they are EXACTLY the same item with the same specifications.
+
+Products to analyze:
+{json.dumps(products_for_ai, indent=2)}
+
+Rules for grouping:
+1. **Group ONLY when truly identical**: Products must be the exact same item to be grouped
+   - Example: "Steel Rebar 10mm" and "Steel Rebars 10mm" ARE THE SAME (plural/singular, same specs)
+   - Example: "Concrete Mix Type A" and "Concrete Mix Type A" ARE THE SAME (identical)
+   
+2. **Keep separate when specifications differ**:
+   - Different dimensions/sizes (e.g., "Werkstoff 1.2436 Ø 212mm" vs "Werkstoff 1.2436 Ø 231mm" are DIFFERENT)
+   - Different lengths (e.g., "3000mm" vs "4000mm" are DIFFERENT)
+   - Different material grades (e.g., "Werkstoff 1.2436" vs "Werkstoff 1.4301" are DIFFERENT)
+   - Different serial/batch numbers (e.g., "Block EDV370287678" vs "Block EDV370382526" are DIFFERENT)
+   - Different surface treatments or processing (e.g., "galvanized" vs "polished" are DIFFERENT)
+   - Any specification that would make them non-interchangeable products
+
+3. **Ignore only these minor differences** (still group together):
+   - Plurals vs singular ("Rebar" vs "Rebars")
+   - Extra whitespace or punctuation
+   - Capitalization differences
+   - Minor typos or abbreviations of the SAME product
+
+4. **For the canonical name**: Use the most common or complete version from the group
+
+Return a JSON object with this structure:
+{{
+    "groups": [
+        {{
+            "product_ids": [0, 3, 7],
+            "canonical_name": "The best representative name for this group"
+        }}
+    ]
+}}
+
+Only include groups that have products from 2 or more different clients.
+Only return the JSON, no other text."""
+
+    try:
+        response = azure_config.client.chat.completions.create(
+            model=azure_config.deployment_name,
+            messages=[
+                {"role": "system", "content": "You are a product categorization expert."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=1,
+        )
+        
+        response_text = response.choices[0].message.content.strip()
+        
+        # Clean up response to extract JSON
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].strip()
+        
+        result = json.loads(response_text)
+        
+        # Validate that groups have products from 2+ different clients
+        validated_groups = []
+        for group in result.get("groups", []):
+            product_ids = group.get("product_ids", [])
+            clients = set()
+            for pid in product_ids:
+                if 0 <= pid < len(products_list):
+                    clients.add(products_list[pid].get("client_name"))
+            
+            if len(clients) >= 2:
+                validated_groups.append(group)
+        
+        return {"groups": validated_groups}
+        
+    except Exception as e:
+        return {"error": str(e), "groups": []}
