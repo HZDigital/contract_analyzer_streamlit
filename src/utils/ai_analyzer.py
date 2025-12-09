@@ -169,6 +169,150 @@ Contract Text:
             "error": str(e)
         }
 
+def extract_client_and_products_from_invoices(text: str) -> Dict[str, Any]:
+    """
+    Extract invoice metadata, parties, and product info from text using LLM.
+    """
+    if not azure_config.client:
+        return {
+            "client_name": "❌ Credentials not configured",
+            "products": [],
+            "contract_type": "❌ Credentials not configured",
+            "error": "Azure OpenAI credentials not configured"
+        }
+    
+    prompt = f"""
+Analyze the following invoice text and return ONLY valid JSON with this structure (use "Not specified" when missing):
+
+{{
+    "invoice_number": "string",
+    "invoice_date": "string",
+    "due_date": "string",
+    "currency": "string",
+    "total_amount": "string",
+    "subtotal": "string",
+    "tax_amount": "string",
+    "tax_rate_percent": "string",
+    "payment_terms": "string",
+    "po_number": "string",
+    "supplier_name": "string",
+    "supplier_address": "string",
+    "customer_name": "string",
+    "customer_address": "string",
+    "ship_to": "string",
+    "tax_id": "string",
+    "products": [
+        {{
+            "product_name": "string",
+            "description": "string",
+            "quantity": "string",
+            "unit": "string",
+            "unit_price": "string",
+            "line_total": "string",
+            "currency": "string",
+            "tax_rate_percent": "string",
+            "sku_or_part_number": "string"
+        }}
+    ],
+    "contract_type": "string",
+    "notes": "string"
+}}
+
+Rules:
+- Preserve currency symbols/codes as in the text.
+- Do not invent data; use "Not specified" if absent.
+- If multiple tax rates or currencies appear, choose the most relevant for totals and note ambiguity in "notes".
+- Do not wrap JSON in markdown fences.
+- Return every key above even if "Not specified".
+
+Contract Text:
+{text}
+    """
+    
+    try:
+        response = azure_config.client.chat.completions.create(
+            model=azure_config.deployment_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1,  # Lower temperature for more consistent extraction
+            
+        )
+        
+        # Try to parse JSON response
+        response_text = response.choices[0].message.content.strip()
+        
+        # Clean up response to extract JSON if it's wrapped in markdown
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].strip()
+            
+        parsed = json.loads(response_text)
+        # Ensure required keys exist even if the model omits them
+        defaults = {
+            "invoice_number": "Not specified",
+            "invoice_date": "Not specified",
+            "due_date": "Not specified",
+            "currency": "Not specified",
+            "total_amount": "Not specified",
+            "subtotal": "Not specified",
+            "tax_amount": "Not specified",
+            "tax_rate_percent": "Not specified",
+            "payment_terms": "Not specified",
+            "po_number": "Not specified",
+            "supplier_name": "Not specified",
+            "supplier_address": "Not specified",
+            "customer_name": "Not specified",
+            "customer_address": "Not specified",
+            "ship_to": "Not specified",
+            "tax_id": "Not specified",
+            "contract_type": "Not specified",
+            "notes": "Not specified",
+            "products": [],
+        }
+        for k, v in defaults.items():
+            parsed.setdefault(k, v)
+        normalized_products = []
+        for item in parsed.get("products", []):
+            item_defaults = {
+                "product_name": "Not specified",
+                "description": "Not specified",
+                "quantity": "Not specified",
+                "unit": "Not specified",
+                "unit_price": "Not specified",
+                "line_total": "Not specified",
+                "currency": parsed.get("currency", "Not specified"),
+                "tax_rate_percent": parsed.get("tax_rate_percent", "Not specified"),
+                "sku_or_part_number": "Not specified",
+            }
+            normalized = {**item_defaults, **(item or {})}
+            normalized_products.append(normalized)
+        parsed["products"] = normalized_products
+        return parsed
+    except Exception as e:
+        # Fallback if JSON parsing fails
+        return {
+            "invoice_number": "Not specified",
+            "invoice_date": "Not specified",
+            "due_date": "Not specified",
+            "currency": "Not specified",
+            "total_amount": "Not specified",
+            "subtotal": "Not specified",
+            "tax_amount": "Not specified",
+            "tax_rate_percent": "Not specified",
+            "payment_terms": "Not specified",
+            "po_number": "Not specified",
+            "supplier_name": "Not specified",
+            "supplier_address": "Not specified",
+            "customer_name": "Extraction failed",
+            "customer_address": "Not specified",
+            "ship_to": "Not specified",
+            "tax_id": "Not specified",
+            "products": [],
+            "contract_type": "Unknown",
+            "notes": "Not specified",
+            "error": str(e)
+        }
+
 
 def group_similar_products(products_list: List[Dict[str, Any]]) -> Dict[str, Any]:
     """

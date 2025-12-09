@@ -4,9 +4,15 @@ Handles Azure OpenAI client initialization and environment variables.
 """
 
 import os
-import streamlit as st
-from openai import AzureOpenAI
 from typing import Optional
+
+import streamlit as st
+from dotenv import load_dotenv
+from openai import AzureOpenAI
+"""Configuration settings for the Contract Analyzer application."""
+
+# Load environment variables from .env if present so Streamlit sessions pick them up
+load_dotenv()
 
 
 class AzureConfig:
