@@ -169,6 +169,18 @@ Contract Text:
             "error": str(e)
         }
 
+    try:
+        response = azure_config.client.chat.completions.create(
+            model=azure_config.deployment_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"\n[AI Extraction Error: {e}]"
+
+
+
 def extract_client_and_products_from_invoices(text: str) -> Dict[str, Any]:
     """
     Extract invoice metadata, parties, and product info from text using LLM.
@@ -220,7 +232,7 @@ Analyze the following invoice text and return ONLY valid JSON with this structur
 
 Rules:
 - Preserve currency symbols/codes as in the text.
-- Do not invent data; use "Not specified" if absent.
+- Do **not** invent data; use "Not specified" if absent.
 - If multiple tax rates or currencies appear, choose the most relevant for totals and note ambiguity in "notes".
 - Do not wrap JSON in markdown fences.
 - Return every key above even if "Not specified".
