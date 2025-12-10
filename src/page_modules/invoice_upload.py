@@ -130,22 +130,98 @@ def _display_invoice_results() -> None:
             else:
                 _display_invoice_failure(result)
 
-     # Export option
-    st.markdown("### 📥 Export Results")
-    st.markdown("Choose your preferred export format:")
+    # Display comprehensive results table
+    st.markdown("---")
+    st.markdown("### 📊 Complete Results Table")
+    _display_invoice_results_table(st.session_state.invoice_results)
 
-    col1, col2 = st.columns(2)
+def _display_invoice_results_table(results: list) -> None:
+    """Display all invoice results in a comprehensive table."""
+    df_rows = []
+    for result in results:
+        products = result.get("products", []) if result.get("status") == "success" else []
+        if products:
+            for product in products:
+                df_rows.append(
+                    {
+                        "File Name": result.get("file_name", ""),
+                        "Invoice #": result.get("invoice_number", "—"),
+                        "Invoice Date": result.get("invoice_date", "—"),
+                        "Due Date": result.get("due_date", "—"),
+                        "Supplier": result.get("supplier_name", "—"),
+                        "Customer": result.get("customer_name", "—"),
+                        "PO #": result.get("po_number", "—"),
+                        "Product/Service": product.get("product_name", "Unknown"),
+                        "Description": product.get("description", "—"),
+                        "Quantity": f"{product.get('quantity', '—')} {product.get('unit', '')}".strip(),
+                        "Unit Price": product.get("unit_price", "—"),
+                        "Line Total": product.get("line_total", "—"),
+                        "Currency": product.get("currency", result.get("currency", "—")),
+                        "Subtotal": result.get("subtotal", "—"),
+                        "Tax %": product.get("tax_rate_percent", result.get("tax_rate_percent", "—")),
+                        "Tax Amount": result.get("tax_amount", "—"),
+                        "Total Amount": result.get("total_amount", "—"),
+                        "SKU/Part #": product.get("sku_or_part_number", "—"),
+                        "Payment Terms": result.get("payment_terms", "—"),
+                        "Ship To": result.get("ship_to", "—"),
+                    }
+                )
+        else:
+            df_rows.append(
+                {
+                    "File Name": result.get("file_name", ""),
+                    "Invoice #": result.get("invoice_number", "—"),
+                    "Invoice Date": result.get("invoice_date", "—"),
+                    "Due Date": result.get("due_date", "—"),
+                    "Supplier": result.get("supplier_name", "—"),
+                    "Customer": result.get("customer_name", "—"),
+                    "PO #": result.get("po_number", "—"),
+                    "Product/Service": "No products detected" if result.get("status") == "success" else "Failed to process",
+                    "Description": "—",
+                    "Quantity": "—",
+                    "Unit Price": "—",
+                    "Line Total": "—",
+                    "Currency": result.get("currency", "—"),
+                    "Subtotal": result.get("subtotal", "—"),
+                    "Tax %": result.get("tax_rate_percent", "—"),
+                    "Tax Amount": result.get("tax_amount", "—"),
+                    "Total Amount": result.get("total_amount", "—"),
+                    "SKU/Part #": "—",
+                    "Payment Terms": result.get("payment_terms", "—"),
+                    "Ship To": result.get("ship_to", "—"),
+                }
+            )
 
-    with col1:
-        st.caption("One row per product/service found")
-        st.download_button(
-            label="Download Invoice Results (CSV)",
-            data=_generate_invoice_csv(st.session_state.invoice_results),
-            file_name="invoice_results.csv",
-            mime="text/csv",
+    if df_rows:
+        df = pd.DataFrame(df_rows)
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "File Name": st.column_config.TextColumn("File Name", width="medium"),
+                "Invoice #": st.column_config.TextColumn("Invoice #", width="small"),
+                "Supplier": st.column_config.TextColumn("Supplier", width="medium"),
+                "Customer": st.column_config.TextColumn("Customer", width="medium"),
+                "Product/Service": st.column_config.TextColumn("Product/Service", width="medium"),
+                "Quantity": st.column_config.TextColumn("Qty", width="small"),
+                "Unit Price": st.column_config.TextColumn("Unit Price", width="small"),
+                "Line Total": st.column_config.TextColumn("Line Total", width="small"),
+                "Total Amount": st.column_config.TextColumn("Total Amount", width="small"),
+            },
         )
-
-   
+        
+        # Export button for results table
+        csv_data = df.to_csv(index=False, sep=";")
+        st.download_button(
+            label="📥 Download Results Table as CSV",
+            data=csv_data,
+            file_name="invoice_results_table.csv",
+            mime="text/csv",
+            key="export_results_table_button"
+        )
+    else:
+        st.info("📭 No results to display")
 
 
 def _display_invoice_success(result: dict) -> None:
@@ -241,78 +317,3 @@ def _display_invoice_failure(result: dict) -> None:
             - Try re-uploading the file
             """
         )
-
-
-def _generate_invoice_csv(results: list) -> bytes:
-    """Create a CSV export for invoice results."""
-    df_rows = []
-    for result in results:
-        products = result.get("products", []) if result.get("status") == "success" else []
-        if products:
-            for product in products:
-                df_rows.append(
-                    {
-                        "file_name": result.get("file_name", ""),
-                        "invoice_number": result.get("invoice_number", "Not specified"),
-                        "invoice_date": result.get("invoice_date", "Not specified"),
-                        "due_date": result.get("due_date", "Not specified"),
-                        "currency": result.get("currency", "Not specified"),
-                        "total_amount": result.get("total_amount", "Not specified"),
-                        "subtotal": result.get("subtotal", "Not specified"),
-                        "tax_amount": result.get("tax_amount", "Not specified"),
-                        "tax_rate_percent": result.get("tax_rate_percent", "Not specified"),
-                        "payment_terms": result.get("payment_terms", "Not specified"),
-                        "po_number": result.get("po_number", "Not specified"),
-                        "supplier_name": result.get("supplier_name", "Not specified"),
-                        "supplier_address": result.get("supplier_address", "Not specified"),
-                        "customer_name": result.get("customer_name", "Not specified"),
-                        "customer_address": result.get("customer_address", "Not specified"),
-                        "ship_to": result.get("ship_to", "Not specified"),
-                        "tax_id": result.get("tax_id", "Not specified"),
-                        "contract_type": result.get("contract_type", "Unknown"),
-                        "product_name": product.get("product_name", "Unknown"),
-                        "description": product.get("description", "Not specified"),
-                        "quantity": product.get("quantity", "Not specified"),
-                        "unit": product.get("unit", ""),
-                        "unit_price": product.get("unit_price", "Not specified"),
-                        "line_total": product.get("line_total", "Not specified"),
-                        "item_currency": product.get("currency", result.get("currency", "Not specified")),
-                        "item_tax_rate_percent": product.get("tax_rate_percent", result.get("tax_rate_percent", "Not specified")),
-                        "sku_or_part_number": product.get("sku_or_part_number", "Not specified"),
-                    }
-                )
-        else:
-            df_rows.append(
-                {
-                    "file_name": result.get("file_name", ""),
-                    "invoice_number": result.get("invoice_number", "Not specified"),
-                    "invoice_date": result.get("invoice_date", "Not specified"),
-                    "due_date": result.get("due_date", "Not specified"),
-                    "currency": result.get("currency", "Not specified"),
-                    "total_amount": result.get("total_amount", "Not specified"),
-                    "subtotal": result.get("subtotal", "Not specified"),
-                    "tax_amount": result.get("tax_amount", "Not specified"),
-                    "tax_rate_percent": result.get("tax_rate_percent", "Not specified"),
-                    "payment_terms": result.get("payment_terms", "Not specified"),
-                    "po_number": result.get("po_number", "Not specified"),
-                    "supplier_name": result.get("supplier_name", "Not specified"),
-                    "supplier_address": result.get("supplier_address", "Not specified"),
-                    "customer_name": result.get("customer_name", "Not specified"),
-                    "customer_address": result.get("customer_address", "Not specified"),
-                    "ship_to": result.get("ship_to", "Not specified"),
-                    "tax_id": result.get("tax_id", "Not specified"),
-                    "contract_type": result.get("contract_type", "Unknown"),
-                    "product_name": "No products detected" if result.get("status") == "success" else "",
-                    "description": "",
-                    "quantity": "",
-                    "unit": "",
-                    "unit_price": "",
-                    "line_total": "",
-                    "item_currency": "",
-                    "item_tax_rate_percent": "",
-                    "sku_or_part_number": "",
-                }
-            )
-
-    df = pd.DataFrame(df_rows)
-    return df.to_csv(index=False).encode("utf-8-sig")
