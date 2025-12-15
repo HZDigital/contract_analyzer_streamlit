@@ -14,6 +14,7 @@ from config.settings import azure_config
 from page_modules.bulk_upload import render_bulk_upload_page
 from page_modules.detailed_analysis import render_detailed_analysis_page
 from page_modules.invoice_upload import render_invoice_upload_page
+from page_modules.use_cases_page import render_use_cases_page
 
 
 def main():
@@ -29,7 +30,12 @@ def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Select Page", 
-        ["Product Request Detection", "Invoice Request Detection", "Detailed Contract Analysis"],
+        [
+            "Product Request Detection",
+            "Invoice Request Detection",
+            "Detailed Contract Analysis",
+            "Miller Cases",
+        ],
         key="main_navigation"  # Add unique key to fix duplicate element error
     )
     
@@ -43,6 +49,8 @@ def main():
         render_invoice_upload_page()
     elif page == "Detailed Contract Analysis":
         render_detailed_analysis_page()
+    elif page == "Miller Cases":
+        render_use_cases_page()
 
 
 if __name__ == "__main__":

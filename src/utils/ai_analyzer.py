@@ -426,3 +426,229 @@ Only return the JSON, no other text."""
         
     except Exception as e:
         return {"error": str(e), "groups": []}
+
+
+# ------------------------------
+# Spec extraction and comparison
+# ------------------------------
+
+def extract_specifications_from_text(text: str) -> Dict[str, Any]:
+    """
+    Use Azure OpenAI to extract a structured JSON of specifications and measurements
+    from arbitrary technical documents (spec PDFs, factory test certificates, etc.).
+    
+    Enhanced to capture ALL parameters without data loss.
+    """
+    if not azure_config.client:
+        return {
+            "error": "Azure OpenAI credentials not configured",
+            "document_type": "unknown",
+            "material_or_product": "Not specified",
+            "revision_or_date": "Not specified",
+            "parameters": []
+        }
+
+    prompt = f"""
+Sie sind ein akribischer Analyst für technische Dokumente. Ihre Aufgabe ist es, JEDEN EINZELNEN Parameter, Spezifikation, Messung oder technische Eigenschaft zu extrahieren, die im folgenden Text erwähnt wird.
+
+WICHTIGE ANWEISUNGEN:
+1. ÜBERSPRINGEN SIE KEINE PARAMETER - erfassen Sie absolut alles
+2. Suchen Sie nach ALLEN Arten von technischen Daten einschließlich:
+   - Dimensionsspezifikationen (Länge, Breite, Durchmesser, Dicke, etc.)
+   - Materialeigenschaften (Zugfestigkeit, Härte, Elastizität, Dichte, etc.)
+   - Chemische Zusammensetzungen (Prozentanteile, Verhältnisse, Konzentrationen)
+   - Leistungsmerkmale (Geschwindigkeit, Kapazität, Effizienz, etc.)
+   - Qualitätsparameter (Oberflächengüte, Toleranzen, Grade)
+   - Testergebnisse und Messwerte
+   - Umgebungsbedingungen (Temperatur, Druck, Feuchtigkeit)
+   - Standards und Compliance-Anforderungen
+   - Beliebige nummerierte oder mit Buchstaben versehene Spezifikationsposten
+
+3. Für JEDEN gefundenen Parameter extrahieren Sie:
+   - parameter: exakter Name/Beschreibung wie geschrieben (AUF DEUTSCH)
+   - unit: Maßeinheit (mm, MPa, %, °C, etc.) oder "Nicht spezifiziert"
+   - spec_min: minimal zulässiger Wert (nur Zahl, oder null)
+   - spec_max: maximal zulässiger Wert (nur Zahl, oder null)
+   - spec_nominal: Ziel-/Sollwert (nur Zahl, oder null)
+   - spec_tolerance_abs: absolute Toleranz wie ±0,1 (nur Zahl, oder null)
+   - spec_tolerance_pct: Prozenttoleranz wie ±5% (nur Zahl, oder null)
+   - measured_value: tatsächlicher gemessener/geprüfter Wert (nur Zahl, oder null)
+   - notes: Kontext, Bedingungen oder Erläuterungen (auf Deutsch)
+
+4. Behandeln Sie verschiedene Wertformate:
+   - Bereich: "10-12 mm" → spec_min: 10, spec_max: 12, unit: "mm"
+   - Sollwert mit Toleranz: "100±2 MPa" → spec_nominal: 100, spec_tolerance_abs: 2, unit: "MPa"
+   - Prozenttoleranz: "50±5%" → spec_nominal: 50, spec_tolerance_pct: 5, unit: "%"
+   - Einzelwert: "25 mm" → spec_nominal: 25, unit: "mm"
+
+5. Geben Sie NUR gültiges JSON mit dieser exakten Struktur zurück:
+{{
+  "document_type": "spezifikation" | "zertifikat" | "unbekannt",
+  "material_or_product": "Material- oder Produktname oder 'Nicht spezifiziert'",
+  "revision_or_date": "Revisionsnummer/Datum oder 'Nicht spezifiziert'",
+  "parameters": [
+    {{
+      "parameter": "string (auf Deutsch)",
+      "unit": "string oder 'Nicht spezifiziert'",
+      "spec_min": number or null,
+      "spec_max": number or null,
+      "spec_nominal": number or null,
+      "spec_tolerance_abs": number or null,
+      "spec_tolerance_pct": number or null,
+      "measured_value": number or null,
+      "notes": "string (auf Deutsch)"
+    }}
+  ]
+}}
+
+VERWENDEN SIE KEINE Markdown-Code-Blöcke. Geben Sie nur reines JSON zurück.
+
+Zu analysierender Text:
+{text}
+"""
+
+    try:
+        response = azure_config.client.chat.completions.create(
+            model=azure_config.deployment_name,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        response_text = response.choices[0].message.content.strip()
+        
+        # Clean any markdown formatting
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].split("```")[0].strip()
+        
+        data = json.loads(response_text)
+
+        # Normalize required keys
+        data.setdefault("document_type", "unbekannt")
+        data.setdefault("material_or_product", "Nicht spezifiziert")
+        data.setdefault("revision_or_date", "Nicht spezifiziert")
+        data.setdefault("parameters", [])
+        
+        # Validate and normalize parameters
+        norm_params = []
+        for p in data.get("parameters", []):
+            norm = {
+                "parameter": str(p.get("parameter", "Unbekannt")).strip(),
+                "unit": str(p.get("unit", "Nicht spezifiziert")).strip(),
+                "spec_min": p.get("spec_min"),
+                "spec_max": p.get("spec_max"),
+                "spec_nominal": p.get("spec_nominal"),
+                "spec_tolerance_abs": p.get("spec_tolerance_abs"),
+                "spec_tolerance_pct": p.get("spec_tolerance_pct"),
+                "measured_value": p.get("measured_value"),
+                "notes": str(p.get("notes", "")).strip(),
+            }
+            
+            # Ensure numeric fields are actually numeric or null
+            numeric_fields = ["spec_min", "spec_max", "spec_nominal", 
+                             "spec_tolerance_abs", "spec_tolerance_pct", "measured_value"]
+            for field in numeric_fields:
+                val = norm[field]
+                if val is not None:
+                    try:
+                        norm[field] = float(val)
+                    except (ValueError, TypeError):
+                        norm[field] = None
+            
+            norm_params.append(norm)
+        
+        data["parameters"] = norm_params
+        return data
+    except Exception as e:
+        return {
+            "error": f"Fehler beim Extrahieren der Spezifikationen: {e}",
+            "document_type": "unbekannt",
+            "material_or_product": "Nicht spezifiziert",
+            "revision_or_date": "Nicht spezifiziert",
+            "parameters": []
+        }
+
+
+def compare_specifications_with_ai(spec_json: Dict[str, Any], cert_json: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Ask Azure OpenAI to compare a baseline specification JSON against a certificate JSON
+        and return normalized results highlighting out-of-tolerance values.
+
+        Expected output structure:
+        {
+            "summary": "string",
+            "comparisons": [
+                {
+                    "parameter": "string",
+                    "unit": "string",
+                    "spec_min": number|null,
+                    "spec_max": number|null,
+                    "spec_nominal": number|null,
+                    "spec_tolerance_abs": number|null,
+                    "spec_tolerance_pct": number|null,
+                    "measured_value": number|null,
+                    "status": "OK|OUT|MISSING|NO_BOUNDS",
+                    "deviation": "string"
+                }
+            ]
+        }
+        """
+        if not azure_config.client:
+                return {"error": "Azure OpenAI credentials not configured", "comparisons": []}
+
+        prompt = f"""
+Sie erhalten zwei JSON-Dokumente:
+- spec_json: Grundspezifikation mit Parametern, Einheiten und Toleranzen
+- cert_json: Messungen aus einem Werkszeugnis
+
+Aufgabe:
+1) Ordnen Sie Parameter nach Name (nicht case-sensitiv; kleine Interpunktion kann ignoriert werden) und Einheit zu.
+2) Für jeden Parameter in beiden Dokumenten berechnen Sie den Status:
+     - OK: Messwert liegt innerhalb [spec_min, spec_max] oder innerhalb Sollwert±Toleranz
+     - NICHT_OK: Messwert existiert, aber liegt außerhalb der Grenzen  
+     - KEINE_GRENZEN: Spezifikation hat keine expliziten Grenzen; Messwert existiert
+     - FEHLEND: Messwert im Zertifikat nicht gefunden
+3) Geben Sie eine klare "Abweichung" für NICHT_OK Werte an (z.B., "-0,12 unter Minimum").
+
+Geben Sie NUR gültiges JSON in diesem Schema zurück (verwenden Sie null für fehlende Zahlen):
+{{
+    "summary": "string (auf Deutsch)",
+    "comparisons": [
+        {{
+            "parameter": "string (auf Deutsch)",
+            "unit": "string (auf Deutsch)",
+            "spec_min": null,
+            "spec_max": null,
+            "spec_nominal": null,
+            "spec_tolerance_abs": null,
+            "spec_tolerance_pct": null,
+            "measured_value": null,
+            "status": "OK|NICHT_OK|FEHLEND|KEINE_GRENZEN",
+            "deviation": "string (auf Deutsch)"
+        }}
+    ]
+}}
+
+spec_json:
+{json.dumps(spec_json, ensure_ascii=False, indent=2)}
+
+cert_json:
+{json.dumps(cert_json, ensure_ascii=False, indent=2)}
+"""
+
+        try:
+                response = azure_config.client.chat.completions.create(
+                        model=azure_config.deployment_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=1,
+                )
+                response_text = response.choices[0].message.content.strip()
+                if "```json" in response_text:
+                        response_text = response_text.split("```json")[1].split("```")[0].strip()
+                elif "```" in response_text:
+                        response_text = response_text.split("```")[1].strip()
+                data = json.loads(response_text)
+                data.setdefault("summary", "")
+                data.setdefault("comparisons", [])
+                return data
+        except Exception as e:
+                return {"error": f"Fehler beim Vergleichen der Spezifikationen: {e}", "comparisons": []}

@@ -9,7 +9,7 @@ import pytesseract
 from io import BytesIO
 from PIL import Image
 from datetime import datetime
-from typing import BinaryIO
+from typing import BinaryIO, Optional, Union
 
 # Optional: DeepSeek-OCR via transformers (local model, no API key needed)
 try:
@@ -23,31 +23,53 @@ _deepseek_model = None
 _deepseek_tokenizer = None
 
 
-def extract_text_from_pdf(file: BinaryIO) -> str:
+def extract_text_from_pdf(file: Union[BinaryIO, bytes]) -> str:
     """
-    Extract text from a PDF file using PyMuPDF and OCR fallback.
+    Extract text from a PDF file using various methods.
     
     Args:
-        file: Binary file object (uploaded PDF)
+        file: Binary file object (uploaded PDF) or raw bytes
         
     Returns:
         str: Extracted text content
     """
-    # Save uploaded file to a temporary file
+    # Obtain PDF bytes robustly (handles Streamlit UploadedFile)
+    pdf_bytes: Optional[bytes] = None
+    try:
+        if isinstance(file, (bytes, bytearray)):
+            pdf_bytes = bytes(file)
+        elif hasattr(file, "getvalue") and callable(getattr(file, "getvalue")):
+            pdf_bytes = file.getvalue()
+        elif hasattr(file, "read") and callable(getattr(file, "read")):
+            try:
+                if hasattr(file, "seek") and callable(getattr(file, "seek")):
+                    file.seek(0)
+            except Exception:
+                pass
+            pdf_bytes = file.read()
+    except Exception as e:
+        return f"[PDF Read Error: {e}]"
+
+    if not pdf_bytes:
+        return "[PDF Error: Empty upload]"
+    
+
+    # Save uploaded bytes to a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(file.read())
+        tmp.write(pdf_bytes)
         tmp_path = tmp.name
 
     try:
-        # Try native text extraction first
+        # Try native text extraction first (default)
         doc = fitz.open(tmp_path)
         full_text = ""
         for page in doc:
             full_text += page.get_text()
         doc.close()
-
+        
         # If no text was extracted, fallback to OCR
-        full_text = _extract_text_with_ocr(tmp_path)
+        if not full_text.strip():
+            full_text = _extract_text_with_ocr(tmp_path)
     
     finally:
         # Clean up temp file
@@ -137,7 +159,6 @@ def _extract_text_with_ocr(pdf_path: str) -> str:
     finally:
         if doc is not None:
             doc.close()
-
 
 def get_text_length_info(text: str) -> dict:
     """
