@@ -26,6 +26,7 @@ from utils.pdf_processor import extract_text_from_pdf
 
 
 def render_factory_test_comparison_page():
+    
     st.title("Factory Certificate Comparison")
     st.markdown(
         """
@@ -212,15 +213,15 @@ def _display_smart_comparison_results(result: Dict[str, Any]):
     st.markdown("---")
     st.markdown("### 📋 Comparison Table")
     
-    # Color coding
+    # Color coding - using colors that work in both light and dark mode
     def highlight_row(row):
         status = str(row.get("status", "")).upper()
         if status == "OUT":
-            return ["background-color: #ffe6e6"] * len(row)
+            return ["background-color: rgba(220, 53, 69, 0.3); border-left: 3px solid #dc3545"] * len(row)
         if status == "MISSING":
-            return ["background-color: #fff5da"] * len(row)
+            return ["background-color: rgba(255, 193, 7, 0.3); border-left: 3px solid #ffc107"] * len(row)
         if status == "OK":
-            return ["background-color: #eaffea"] * len(row)
+            return ["background-color: rgba(40, 167, 69, 0.3); border-left: 3px solid #28a745"] * len(row)
         return [""] * len(row)
     
     styled = df.style.apply(highlight_row, axis=1)

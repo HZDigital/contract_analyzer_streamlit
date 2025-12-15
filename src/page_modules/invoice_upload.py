@@ -10,6 +10,14 @@ from utils.ai_analyzer import extract_client_and_products_from_invoices
 
 def render_invoice_upload_page():
     """Render the invoice detection page."""
+
+    # Back button
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("← Back to Dashboard", use_container_width=True):
+            st.session_state.current_page = "dashboard"
+            st.rerun()
+    
     st.title("Invoice Request Detection")
     st.markdown(
         """

@@ -12,6 +12,13 @@ from utils.file_utils import save_analysis_result, generate_detailed_analysis_cs
 
 def render_detailed_analysis_page():
     """Render the detailed contract analysis page."""
+    # Back button
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("← Back to Dashboard", use_container_width=True):
+            st.session_state.current_page = "dashboard"
+            st.rerun()
+    
     st.title("Detailed Contract Analysis")
     
     st.markdown("""

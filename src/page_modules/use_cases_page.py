@@ -12,6 +12,14 @@ import streamlit as st
 
 def render_use_cases_page():
     """Main use cases page with selector."""
+    
+    # Back button
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("← Back to Dashboard", use_container_width=True):
+            st.session_state.current_page = "dashboard"
+            st.rerun()
+    
     st.title("AI Contract Analysis - Use Cases")
     st.markdown(
         """
@@ -114,5 +122,4 @@ def _render_factory_test_comparison():
     """Use Case 3 - Comparison of factory test certificates against specifications."""
     from page_modules.factory_test_comparison import render_factory_test_comparison_page
     
-    st.header("🏭 Use Case 3: Factory Certificate Comparison")
     render_factory_test_comparison_page()

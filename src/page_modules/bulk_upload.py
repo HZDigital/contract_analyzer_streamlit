@@ -12,6 +12,13 @@ from utils.file_utils import  generate_detailed_csv_download_data
 
 def render_bulk_upload_page():
     """Render the bulk upload and detection page."""
+    # Back button
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("← Back to Dashboard", use_container_width=True):
+            st.session_state.current_page = "dashboard"
+            st.rerun()
+    
     st.title("Product Request Detection")
     
     st.markdown("""
