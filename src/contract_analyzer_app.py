@@ -55,7 +55,7 @@ def main():
         render_invoice_upload_page()
     elif st.session_state.current_page == "detailed_analysis":
         render_detailed_analysis_page()
-    elif st.session_state.current_page == "miller_cases":
+    elif st.session_state.current_page == "mehler_cases":
         render_use_cases_page()
 
 

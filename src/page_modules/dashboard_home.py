@@ -119,10 +119,10 @@ def render_dashboard_home():
         },
         {
             "icon": "🎯",
-            "title": "Miller's Use Cases",
+            "title": "Mehler's Use Cases",
             "desc": "",
-            "key": "btn_miller",
-            "page": "miller_cases"
+            "key": "btn_mehler",
+            "page": "mehler_cases"
         },
     ]
 

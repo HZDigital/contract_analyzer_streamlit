@@ -652,3 +652,190 @@ cert_json:
                 return data
         except Exception as e:
                 return {"error": f"Fehler beim Vergleichen der Spezifikationen: {e}", "comparisons": []}
+        
+
+def analyze_tender_document(text: str, truncate_length: int = 12000) -> Dict[str, Any]:
+    """Analyze a tender document, translate key content into German, and extract structured fields."""
+    if not azure_config.client:
+        return {
+            "error": "❌ Azure OpenAI credentials not configured. "
+                    "Please set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT environment variables.",
+            "german_summary": "",
+            "german_bullets": [],
+            "tender_fields": {},
+            "key_requirements": [],
+            "risks": [],
+            "deliverables": []
+        }
+
+    truncated_text = text[:truncate_length]
+
+    prompt = f"""
+You are a tender analyst. Read the tender document, extract the most relevant fields, and provide a German translation/summary.
+
+Return ONLY valid JSON with this structure (use "Nicht angegeben" when missing):
+{{
+  "german_summary": "Kurzfassung auf Deutsch",
+  "german_bullets": ["3-7 Stichpunkte auf Deutsch"],
+  "tender_fields": {{
+    "customer": "Ausschreibende Stelle / Kunde",
+    "project_title": "Projekt- oder Leistungsbezeichnung",
+    "reference_number": "Aktenzeichen/Referenznummer",
+    "procedure": "Verfahrensart (z.B. Offenes Verfahren)",
+    "submission_deadline": "Frist für Angebotsabgabe",
+    "questions_deadline": "Frist für Bieterfragen/Klarstellungen",
+    "contract_start": "Geplantes Leistungs-/Vertragsbeginndatum",
+    "contract_end": "Geplantes Vertragsende/Laufzeit",
+    "estimated_value": "Gesamtwert/Budget falls genannt",
+    "country": "Land/Region",
+    "language": "Sprache der Einreichung",
+    "cpv_codes": ["Liste der CPV-Codes"],
+    "notes": "Weitere wichtige Hinweise in Deutsch"
+  }},
+  "key_requirements": ["Pflichtanforderung 1", "Pflichtanforderung 2"],
+  "deliverables": ["Leistung/Lieferumfang 1", "Leistung/Lieferumfang 2"],
+  "risks": ["Risiko oder Stolperstein 1", "Risiko oder Stolperstein 2"]
+}}
+
+Document (truncate for tokens):
+{truncated_text}
+    """
+
+    try:
+        response = azure_config.client.chat.completions.create(
+            model=azure_config.deployment_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1
+        )
+
+        response_text = response.choices[0].message.content.strip()
+
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].strip()
+
+        parsed = json.loads(response_text)
+
+        # Normalize required keys
+        defaults = {
+            "german_summary": "",
+            "german_bullets": [],
+            "tender_fields": {},
+            "key_requirements": [],
+            "risks": [],
+            "deliverables": []
+        }
+        for k, v in defaults.items():
+            parsed.setdefault(k, v)
+
+        tender_defaults = {
+            "customer": "Nicht angegeben",
+            "project_title": "Nicht angegeben",
+            "reference_number": "Nicht angegeben",
+            "procedure": "Nicht angegeben",
+            "submission_deadline": "Nicht angegeben",
+            "questions_deadline": "Nicht angegeben",
+            "contract_start": "Nicht angegeben",
+            "contract_end": "Nicht angegeben",
+            "estimated_value": "Nicht angegeben",
+            "country": "Nicht angegeben",
+            "language": "Nicht angegeben",
+            "cpv_codes": [],
+            "notes": "Nicht angegeben"
+        }
+        parsed_fields = {**tender_defaults, **(parsed.get("tender_fields") or {})}
+        parsed["tender_fields"] = parsed_fields
+
+        # Ensure list fields are lists of strings
+        list_keys = ["german_bullets", "key_requirements", "risks", "deliverables"]
+        for key in list_keys:
+            if key in parsed and not isinstance(parsed[key], list):
+                parsed[key] = [str(parsed[key])]
+
+        cpv_codes = parsed_fields.get("cpv_codes", [])
+        if not isinstance(cpv_codes, list):
+            cpv_codes = [str(cpv_codes)]
+        parsed_fields["cpv_codes"] = [str(item) for item in cpv_codes]
+
+        return parsed
+    except Exception as e:
+        return {
+            "error": f"❌ Error analyzing tender: {str(e)}",
+            "german_summary": "",
+            "german_bullets": [],
+            "tender_fields": {},
+            "key_requirements": [],
+            "risks": [],
+            "deliverables": []
+        }
+
+
+def analyze_tender_with_fields(text: str, desired_fields: list,) -> Dict[str, Any]:
+    """Analyze a tender document focusing on a provided list of field names.
+
+    Returns ONLY JSON with keys:
+    - "extracted": {<field>: <value>}
+    - "german_summary": str
+    - "notes": str
+    """
+    if not azure_config.client:
+        return {
+            "error": "❌ Azure OpenAI credentials not configured.",
+            "extracted": {},
+            "german_summary": "",
+            "notes": ""
+        }
+
+    truncated_text = text
+    fields_str = "\n".join(f"- {f}" for f in desired_fields)
+    prompt = f"""
+Du bist ein Vergabe-Analyst. Lies das Dokument und fülle die geforderten Felder. Antworte NUR mit gültigem JSON.
+
+Felder (verwende exakt diese Bezeichnungen):
+{fields_str}
+
+Regeln:
+- Falls Information fehlt, schreibe "Nicht angegeben".
+- Erfinde keine Daten.
+
+Gib zurück:
+{{
+  "extracted": {{ "<Feld>": "Wert" }},
+  "german_summary": "Kurzfassung auf Deutsch",
+  "notes": "Wichtige Hinweise/Unsicherheiten"
+}}
+
+Dokument (gekürzt):
+{truncated_text}
+    """
+
+    try:
+        response = azure_config.client.chat.completions.create(
+            model=azure_config.deployment_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1
+        )
+
+        response_text = response.choices[0].message.content.strip()
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].strip()
+
+        parsed = json.loads(response_text)
+        extracted = parsed.get("extracted", {}) or {}
+        # Ensure all desired fields exist
+        for f in desired_fields:
+            extracted.setdefault(f, "Nicht angegeben")
+        parsed["extracted"] = extracted
+        parsed.setdefault("german_summary", "")
+        parsed.setdefault("notes", "")
+        return parsed
+    except Exception as e:
+        return {
+            "error": f"❌ Error analyzing tender (fields): {str(e)}",
+            "extracted": {f: "Nicht angegeben" for f in desired_fields},
+            "german_summary": "",
+            "notes": ""
+        }

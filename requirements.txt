@@ -4,6 +4,7 @@ openai
 pytesseract
 pillow
 pandas
+openpyxl
 python-dotenv
 transformers
 torch

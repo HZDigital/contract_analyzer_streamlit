@@ -9,7 +9,6 @@ This page provides access to:
 
 import streamlit as st
 
-
 def render_use_cases_page():
     """Main use cases page with selector."""
     
@@ -45,43 +44,12 @@ def render_use_cases_page():
     
     # Route to the appropriate use case
     if "Use Case 1" in use_case:
-        _render_tender_analysis()
+        from page_modules.tender_analysis import render_tender_analysis_page
+        render_tender_analysis_page()
     elif "Use Case 2" in use_case:
         _render_contract_review()
     elif "Use Case 3" in use_case:
         _render_factory_test_comparison()
-
-
-def _render_tender_analysis():
-    """Use Case 1 - Analyzing tender documents & fill out internal tender list."""
-    st.header("📋 Use Case 1: Tender Document Analysis")
-    st.markdown(
-        """
-        **AI-powered tender document analysis:**
-        - Upload tender documents (PDFs)
-        - AI extracts key information automatically
-        - Generate internal tender list
-        - Export structured data
-        """
-    )
-
-    st.markdown("---")
-
-    # Not implemented message
-    st.info("🚧 This feature is not implemented yet.")
-    
-    st.markdown(
-        """
-        ### Planned Features:
-        - 📄 Upload multiple tender documents
-        - 🤖 AI extraction of key tender information
-        - 📊 Auto-fill internal tender list template
-        - 💾 Export to Excel/CSV format
-        - 🔍 Compare multiple tenders side-by-side
-        
-        Stay tuned for updates!
-        """
-    )
 
 
 def _render_contract_review():
