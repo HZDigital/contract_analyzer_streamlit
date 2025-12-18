@@ -137,6 +137,7 @@ def render_tender_analysis_page():
                     "analysis": merged_analysis,
                     "success": True
                 }
+                source_files = [r.get("file_name", "") for r in successful_results if r.get("file_name")]
 
                 # Display merged fields in table format (Feld | Wert)
                 extracted = merged_analysis.get("extracted", {})
@@ -153,7 +154,7 @@ def render_tender_analysis_page():
                 styled = df.style.apply(highlight_row, axis=1)
                 st.dataframe(styled, use_container_width=True, hide_index=True)
                 
-                workbook = _fill_form_template(merged_result, tender_template, template_structure)
+                workbook = _fill_form_template(merged_result, tender_template, template_structure, source_files)
                 st.download_button(
                     f"📥 Download: Tender Package (Filled)",
                     data=workbook.getvalue(),
@@ -167,7 +168,7 @@ def render_tender_analysis_page():
             # Fallback: generic table-style export
             prepared_rows = [_build_tender_row(r) for r in results if r.get("success")]
             if prepared_rows:
-                workbook = _build_tender_workbook(prepared_rows, None)
+                workbook = _build_tender_workbook(prepared_rows, tender_template)
                 st.download_button(
                     "Download filled tender list (Excel)",
                     data=workbook.getvalue(),
@@ -187,10 +188,11 @@ def _merge_tender_analyses(results: list) -> dict:
     2. Concatenate German summaries from all documents
     """
     if not results:
-        return {"extracted": {}, "german_summary": "", "notes": ""}
+        return {"extracted": {}, "german_summary": "", "notes": "", "field_sources": {}}
     
     # Start with first result's extracted fields
     merged_extracted = dict(results[0].get("analysis", {}).get("extracted", {}))
+    field_sources = {field: results[0].get("file_name", "") for field in merged_extracted.keys()}
     
     # Fill in missing values from subsequent documents
     for result in results[1:]:
@@ -198,6 +200,7 @@ def _merge_tender_analyses(results: list) -> dict:
         for field, value in extracted.items():
             if not merged_extracted.get(field) or merged_extracted[field] == "Nicht angegeben":
                 merged_extracted[field] = value
+                field_sources[field] = result.get("file_name", "")
     
     # Concatenate German summaries
     summaries = []
@@ -220,7 +223,8 @@ def _merge_tender_analyses(results: list) -> dict:
     return {
         "extracted": merged_extracted,
         "german_summary": merged_summary,
-        "notes": merged_notes
+        "notes": merged_notes,
+        "field_sources": field_sources
     }
 
 
@@ -235,6 +239,7 @@ def _parse_form_template(template_file) -> dict:
     # Extract field names from column E (index 4) where values end with ':'
     field_map = {}
     field_names = []
+    source_field_cell = None
 
     for idx, row in df.iterrows():
         if len(row) > 4 and pd.notna(row[4]):
@@ -248,20 +253,28 @@ def _parse_form_template(template_file) -> dict:
                 }
                 field_names.append(field_label_clean)
 
+        if source_field_cell is None:
+            for col_idx, value in enumerate(row):
+                if isinstance(value, str) and value.strip().lower() == "quelle tenderunterlagen":
+                    source_field_cell = {'row': idx, 'col': col_idx}
+                    break
+
     return {
         'field_names': field_names,
         'field_map': field_map,
         'sheet_name': first_sheet,
-        'template_bytes': base_bytes
+        'template_bytes': base_bytes,
+        'source_field_cell': source_field_cell
     }
 
 
-def _fill_form_template(result: dict, template_file, template_structure: dict) -> BytesIO:
+def _fill_form_template(result: dict, template_file, template_structure: dict, source_files=None) -> BytesIO:
     """Fill a form-style template with extracted values for a single tender document."""
     from openpyxl import load_workbook
     
     analysis = result.get("analysis", {})
     extracted = analysis.get("extracted", {})
+    field_sources = analysis.get("field_sources", {})
     
     # Load template workbook
     workbook = load_workbook(BytesIO(template_structure['template_bytes']))
@@ -271,11 +284,27 @@ def _fill_form_template(result: dict, template_file, template_structure: dict) -
     field_map = template_structure['field_map']
     for field_name, position in field_map.items():
         value = extracted.get(field_name, "Nicht angegeben")
+        source_file = field_sources.get(field_name, "")
+        
         # Excel uses 1-based indexing, pandas uses 0-based
         row_num = position['row'] + 1
         col_letter = get_column_letter(position['value_col'] + 1)  # Convert to Excel column letter
+        
+        # Write value in column F
         cell = sheet[f"{col_letter}{row_num}"]
         cell.value = value
+        
+        # Write source filename in column G (next column) only if value is valid
+        if source_file and value != "Nicht angegeben":
+            source_col_letter = get_column_letter(position['value_col'] + 2)
+            source_cell = sheet[f"{source_col_letter}{row_num}"]
+            # Check if cell is merged and skip if it is
+            if not isinstance(source_cell, type(source_cell).__mro__[0]) or source_cell.__class__.__name__ != 'MergedCell':
+                try:
+                    source_cell.value = source_file
+                except AttributeError:
+                    # Cell is merged or read-only, skip it
+                    pass
     
     # Optionally fill project description if row 4 exists
     summary = analysis.get("german_summary", "")
@@ -284,6 +313,15 @@ def _fill_form_template(result: dict, template_file, template_structure: dict) -
             sheet['C4'] = summary  # Adjust as needed
         except:
             pass
+
+    source_field_cell = template_structure.get("source_field_cell")
+    if source_field_cell:
+        sources_to_write = source_files or [result.get("file_name", "")]
+        sources_to_write = [s for s in sources_to_write if s]
+        if sources_to_write:
+            row_num = source_field_cell['row'] + 1
+            col_letter = get_column_letter(source_field_cell['col'] + 1)
+            sheet[f"{col_letter}{row_num}"].value = ", ".join(sources_to_write)
     
     # Save to BytesIO
     output = BytesIO()
@@ -328,7 +366,7 @@ def _build_tender_workbook(rows: list, template_upload) -> BytesIO:
         sheets[first_sheet] = _append_rows_to_df(sheets[first_sheet], rows)
     else:
         default_cols = [
-            "Source File", "Customer", "Project Title", "Procedure", "Reference Number",
+            "Source File", "Quelle Tenderunterlagen", "Customer", "Project Title", "Procedure", "Reference Number",
             "Submission Deadline", "Questions Deadline", "Contract Start", "Contract End",
             "Estimated Value", "Country", "Language", "CPV Codes", "Scope/Requirements",
             "Risks", "Summary", "Notes"
@@ -344,8 +382,15 @@ def _build_tender_workbook(rows: list, template_upload) -> BytesIO:
 
 
 def _append_rows_to_df(df: pd.DataFrame, rows: list) -> pd.DataFrame:
-    mapped = [_map_row_to_columns(row, list(df.columns)) for row in rows]
-    return pd.concat([df, pd.DataFrame(mapped)], ignore_index=True)
+    columns = list(df.columns)
+    mapped = [_map_row_to_columns(row, columns) for row in rows]
+    new_df = pd.DataFrame(mapped)
+
+    # Explicitly fill the "Quelle Tenderunterlagen" column with the source filenames per row if present in template
+    if "Quelle Tenderunterlagen" in df.columns:
+        new_df["Quelle Tenderunterlagen"] = [row.get("source_file", "") for row in rows]
+
+    return pd.concat([df, new_df], ignore_index=True)
 
 
 def _map_row_to_columns(row: dict, columns: list) -> dict:
@@ -367,11 +412,11 @@ def _map_row_to_columns(row: dict, columns: list) -> dict:
         "risks": ["risiko", "risk"],
         "summary": ["summary", "zusammenfassung"],
         "notes": ["note", "hinweis", "bemerk"],
-        "source_file": ["file", "datei", "quelle"]
+        "source_file": ["file", "datei", "quelle", "quelle tenderunterlagen"]
     }
 
     for col in columns:
-        col_lower = col.lower()
+        col_lower = str(col).lower()
         value = ""
         for key, hints in mapping.items():
             if any(hint in col_lower for hint in hints):
@@ -386,7 +431,7 @@ def _map_row_to_default(row: dict, columns: list) -> dict:
     ordered = []
     for col in columns:
         col_lower = col.lower()
-        if "source" in col_lower:
+        if "quelle tenderunterlagen" in col_lower or "source" in col_lower:
             ordered.append(row.get("source_file", ""))
         elif "customer" in col_lower:
             ordered.append(row.get("customer", ""))
