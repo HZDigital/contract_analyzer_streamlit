@@ -35,22 +35,23 @@ def render_tender_analysis_page():
 
     st.markdown("---")
 
-    tender_files = st.file_uploader(
-        "Upload tender documents (PDF)",
-        type=["pdf"],
-        accept_multiple_files=True,
-        help="You can upload multiple PDF tender documents."
-    )
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        tender_files = st.file_uploader(
+            "Upload tender documents (PDF)",
+            type=["pdf"],
+            accept_multiple_files=True,
+            help="You can upload multiple PDF tender documents."
+        )
 
-    tender_template = st.file_uploader(
-        "Upload internal tender list template (XLSX)",
-        type=["xlsx"],
-        key="tender_template_upload",
-        help="The first sheet will be filled with extracted data."
-    )
-
-    st.markdown("**Group related PDFs together** (e.g., tender + appendix):")
-    st.caption("All uploaded files are treated as one coherent tender package and merged into a single filled form.")
+    with col2:
+        tender_template = st.file_uploader(
+            "Upload internal tender list template (XLSX)",
+            type=["xlsx"],
+            key="tender_template_upload",
+            help="The first sheet will be filled with extracted data."
+        )
 
     # Initialize from session to keep context across reruns (e.g., after downloads)
     template_structure = st.session_state.get("tender_template_structure")

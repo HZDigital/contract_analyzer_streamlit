@@ -47,43 +47,10 @@ def render_use_cases_page():
         from page_modules.tender_analysis import render_tender_analysis_page
         render_tender_analysis_page()
     elif "Use Case 2" in use_case:
-        _render_contract_review()
+        from page_modules.contract_review_cooperation import render_contract_review_cooperation_page
+        render_contract_review_cooperation_page()
     elif "Use Case 3" in use_case:
         _render_factory_test_comparison()
-
-
-def _render_contract_review():
-    """Use Case 2 - Contract review of cooperation agreements."""
-    st.header("📝 Use Case 2: Contract Review - Cooperation Agreements")
-    st.markdown(
-        """
-        **AI-powered contract review:**
-        - Upload cooperation agreements (PDFs)
-        - AI analyzes contract terms and clauses
-        - Identifies risks and obligations
-        - Generates comprehensive review report
-        """
-    )
-
-    st.markdown("---")
-
-    # Not implemented message
-    st.info("🚧 This feature is not implemented yet.")
-    
-    st.markdown(
-        """
-        ### Planned Features:
-        - 📄 Upload cooperation agreements
-        - 🤖 AI-powered clause analysis
-        - ⚠️ Risk identification and flagging
-        - 📋 Extract key obligations and deadlines
-        - 🔐 Confidentiality and liability assessment
-        - 📊 Generate review summary report
-        - 💾 Export findings to Word/PDF
-        
-        Stay tuned for updates!
-        """
-    )
 
 
 def _render_factory_test_comparison():

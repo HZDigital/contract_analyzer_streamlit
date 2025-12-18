@@ -48,15 +48,7 @@ def render_factory_test_comparison_page():
         help="Drop both specification PDFs and certificate PDFs here - AI will figure out which is which",
     )
 
-    if not uploaded_files:
-        st.info("Upload your specification and certificate PDFs to begin automatic comparison.")
-        return
-
-    if len(uploaded_files) < 2:
-        st.warning("Please upload at least 2 PDFs (at least one specification and one certificate).")
-        return
-
-    if st.button("🚀 Analyze & Compare", type="primary", use_container_width=True):
+    if st.button("Analyze & Compare", use_container_width=True):
         _process_ai_comparison(uploaded_files )
 
 

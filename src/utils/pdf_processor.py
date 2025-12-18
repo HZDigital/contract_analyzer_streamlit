@@ -176,3 +176,83 @@ def get_text_length_info(text: str) -> dict:
         "is_short": length < 3000,
         "recommended_truncate": min(3500, length) if length >= 3000 else length
     }
+
+
+def extract_text_from_docx(file: Union[BinaryIO, bytes]) -> str:
+    """
+    Extract text from a Word document (.docx).
+    
+    Args:
+        file: Binary file object (uploaded DOCX) or raw bytes
+        
+    Returns:
+        str: Extracted text content
+    """
+    try:
+        from docx import Document
+    except ImportError:
+        return "[Error: python-docx not installed. Run: pip install python-docx]"
+    
+    try:
+        # Handle different input types
+        if isinstance(file, (bytes, bytearray)):
+            doc_bytes = BytesIO(bytes(file))
+        elif hasattr(file, "getvalue") and callable(getattr(file, "getvalue")):
+            doc_bytes = BytesIO(file.getvalue())
+        elif hasattr(file, "read") and callable(getattr(file, "read")):
+            try:
+                if hasattr(file, "seek") and callable(getattr(file, "seek")):
+                    file.seek(0)
+            except Exception:
+                pass
+            doc_bytes = BytesIO(file.read())
+        else:
+            return "[Error: Invalid file format]"
+        
+        # Open the Word document
+        doc = Document(doc_bytes)
+        
+        # Extract all paragraphs
+        full_text = []
+        for paragraph in doc.paragraphs:
+            if paragraph.text.strip():
+                full_text.append(paragraph.text)
+        
+        # Extract text from tables
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = []
+                for cell in row.cells:
+                    if cell.text.strip():
+                        row_text.append(cell.text)
+                if row_text:
+                    full_text.append(" | ".join(row_text))
+        
+        return "\n".join(full_text)
+    
+    except Exception as e:
+        return f"[Word Document Error: {e}]"
+
+
+def extract_text_from_file(file: Union[BinaryIO, bytes], filename: str) -> str:
+    """
+    Extract text from a file (PDF or Word document) based on file extension.
+    
+    Args:
+        file: Binary file object or raw bytes
+        filename: Name of the file to determine type
+        
+    Returns:
+        str: Extracted text content
+    """
+    filename_lower = filename.lower()
+    
+    if filename_lower.endswith('.pdf'):
+        return extract_text_from_pdf(file)
+    elif filename_lower.endswith('.docx'):
+        return extract_text_from_docx(file)
+    elif filename_lower.endswith('.doc'):
+        # Old .doc format - try docx parser anyway (may not work)
+        return extract_text_from_docx(file)
+    else:
+        return f"[Error: Unsupported file format for {filename}]"

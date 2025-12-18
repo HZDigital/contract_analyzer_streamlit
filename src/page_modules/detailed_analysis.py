@@ -217,7 +217,7 @@ def _display_structured_analysis(analysis):
         )
         
         # CSV Export button for products/services
-        csv_data = df_products.to_csv(index=False)
+        csv_data = df_products.to_csv(index=False, sep=";").encode("utf-8")
         st.download_button(
             label="📥 Download Products/Services as CSV",
             data=csv_data,

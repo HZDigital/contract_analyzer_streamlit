@@ -839,3 +839,275 @@ Dokument (gekürzt):
             "german_summary": "",
             "notes": ""
         }
+
+
+def analyze_cooperation_agreement(text: str, truncate_length: int = 12000, 
+                                   include_risk_assessment: bool = True,
+                                   include_recommendations: bool = True) -> Dict[str, Any]:
+    """
+    Analyze a cooperation agreement (supplier proposal) for key terms, risks, and obligations.
+    
+    Args:
+        text: Contract text to analyze
+        truncate_length: Maximum text length to send to AI
+        include_risk_assessment: Whether to include risk analysis
+        include_recommendations: Whether to include recommendations
+        
+    Returns:
+        dict: Structured analysis with summary, clauses, risks, and recommendations
+    """
+    if not azure_config.client:
+        return {
+            "error": "Azure OpenAI credentials not configured",
+            "summary": {},
+            "key_clauses": [],
+            "risks": [],
+            "recommendations": []
+        }
+    
+    truncated_text = text[:truncate_length]
+    
+    prompt = f"""
+You are an expert legal contract analyst. Analyze the provided cooperation agreement and return a detailed structured analysis in JSON format.
+
+Return ONLY valid JSON with this exact structure:
+{{
+    "summary": {{
+        "contract_type": "Type of cooperation agreement",
+        "parties": "Parties involved",
+        "duration": "Contract duration",
+        "status": "Active/Proposed/Draft",
+        "description": "Brief description of the agreement"
+    }},
+    "key_clauses": [
+        {{
+            "type": "Clause type (e.g., Payment Terms, Confidentiality, Termination, Liability, Scope of Work)",
+            "description": "Description of the clause",
+            "quote": "Direct quote from contract",
+            "importance": "critical|high|standard"
+        }}
+    ],
+    "risks": [
+        {{
+            "title": "Risk title",
+            "category": "Financial|Legal|Operational|Other",
+            "severity": "high|medium|low",
+            "description": "Detailed description of the risk",
+            "affected_section": "Contract section reference",
+            "quote": "Relevant contract text",
+            "recommendation": "How to mitigate this risk"
+        }}
+    ],
+    "recommendations": [
+        {{
+            "action": "Recommended action",
+            "priority": "high|medium|low",
+            "rationale": "Why this action is recommended",
+            "section": "Affected contract section"
+        }}
+    ]
+}}
+
+Rules:
+- Use "Not specified" if information is missing
+- Quote relevant contract passages
+- Focus on obligations, payment terms, liability, confidentiality, and termination clauses
+- Flag ambiguous language and unusual terms
+- Prioritize financial and legal risks
+
+Contract text:
+{truncated_text}
+    """
+    
+    try:
+        response = azure_config.client.chat.completions.create(
+            model=azure_config.deployment_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1
+        )
+        
+        response_text = response.choices[0].message.content.strip()
+        
+        # Clean up JSON markdown
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].strip()
+        
+        parsed = json.loads(response_text)
+        
+        # Normalize structure
+        parsed.setdefault("summary", {})
+        parsed.setdefault("key_clauses", [])
+        parsed.setdefault("risks", [])
+        parsed.setdefault("recommendations", [])
+        
+        # Filter results based on options
+        if not include_risk_assessment:
+            parsed["risks"] = []
+        
+        if not include_recommendations:
+            parsed["recommendations"] = []
+        
+        return parsed
+        
+    except Exception as e:
+        return {
+            "error": f"Error analyzing agreement: {str(e)}",
+            "summary": {},
+            "key_clauses": [],
+            "risks": [],
+            "recommendations": []
+        }
+
+
+def compare_contracts(supplier_text: str, standard_text: str, truncate_length: int = 12000,
+                     include_risk_assessment: bool = True,
+                     include_deviation_analysis: bool = True,
+                     include_recommendations: bool = True) -> Dict[str, Any]:
+    """
+    Compare a supplier's agreement proposal against a standard MVS contract.
+    
+    Args:
+        supplier_text: Supplier's proposed agreement text
+        standard_text: Standard contract template text
+        truncate_length: Max text length per document
+        include_risk_assessment: Whether to include risk analysis
+        include_deviation_analysis: Whether to compare deviations
+        include_recommendations: Whether to include recommendations
+        
+    Returns:
+        dict: Comparison results with deviations, risks, and recommendations
+    """
+    if not azure_config.client:
+        return {
+            "error": "Azure OpenAI credentials not configured",
+            "summary": {},
+            "deviations": [],
+            "risks": [],
+            "key_clauses": [],
+            "recommendations": []
+        }
+    
+    supplier_truncated = supplier_text[:truncate_length]
+    standard_truncated = standard_text[:truncate_length]
+    
+    prompt = f"""
+You are an expert legal contract analyst specializing in comparing cooperation agreements against standard templates. 
+Compare the supplier's proposed agreement against the standard MVS contract and identify deviations, risks, and problematic terms.
+
+Return ONLY valid JSON with this exact structure:
+{{
+    "summary": {{
+        "contract_type": "Type of agreement",
+        "parties": "Parties involved",
+        "duration": "Contract duration",
+        "status": "Analysis status",
+        "description": "Brief comparison overview"
+    }},
+    "deviations": [
+        {{
+            "title": "Deviation title",
+            "severity": "high|medium|low",
+            "standard": "What the standard contract says",
+            "supplier": "What the supplier's proposal says",
+            "impact": "Impact of this deviation",
+            "section": "Contract section"
+        }}
+    ],
+    "risks": [
+        {{
+            "title": "Risk title",
+            "category": "Financial|Legal|Operational|Other",
+            "severity": "high|medium|low",
+            "description": "Detailed risk description",
+            "affected_section": "Contract section reference",
+            "quote": "Relevant text from supplier agreement",
+            "recommendation": "Mitigation strategy"
+        }}
+    ],
+    "key_clauses": [
+        {{
+            "type": "Clause type",
+            "description": "Clause description",
+            "quote": "Direct quote",
+            "importance": "critical|high|standard"
+        }}
+    ],
+    "recommendations": [
+        {{
+            "action": "Recommended action",
+            "priority": "high|medium|low",
+            "rationale": "Why this action is needed",
+            "section": "Affected section"
+        }}
+    ]
+}}
+
+STANDARD CONTRACT (Template):
+{standard_truncated}
+
+SUPPLIER'S PROPOSED AGREEMENT:
+{supplier_truncated}
+
+Analysis focus:
+- Identify terms that differ significantly from standard
+- Flag risky modifications to liability, confidentiality, and payment terms
+- Highlight ambiguous or missing clauses
+- Note financial exposure differences
+- Compare payment terms, termination clauses, and dispute resolution
+- Check for unusual limitations or unreasonable demands
+- Prioritize high-risk deviations that need negotiation
+
+Rules:
+- Be specific and reference exact sections
+- Quote relevant passages from both documents
+- Rate severity based on financial and legal impact
+- Suggest concrete negotiation points
+    """
+    
+    try:
+        response = azure_config.client.chat.completions.create(
+            model=azure_config.deployment_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1
+        )
+        
+        response_text = response.choices[0].message.content.strip()
+        
+        # Clean up JSON markdown
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].strip()
+        
+        parsed = json.loads(response_text)
+        
+        # Normalize structure
+        parsed.setdefault("summary", {})
+        parsed.setdefault("deviations", [])
+        parsed.setdefault("risks", [])
+        parsed.setdefault("key_clauses", [])
+        parsed.setdefault("recommendations", [])
+        
+        # Filter based on options
+        if not include_deviation_analysis:
+            parsed["deviations"] = []
+        
+        if not include_risk_assessment:
+            parsed["risks"] = []
+        
+        if not include_recommendations:
+            parsed["recommendations"] = []
+        
+        return parsed
+        
+    except Exception as e:
+        return {
+            "error": f"Error comparing contracts: {str(e)}",
+            "summary": {},
+            "deviations": [],
+            "risks": [],
+            "key_clauses": [],
+            "recommendations": []
+        }
