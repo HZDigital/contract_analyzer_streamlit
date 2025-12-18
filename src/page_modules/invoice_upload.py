@@ -14,7 +14,7 @@ def render_invoice_upload_page():
     # Back button
     col1, col2 = st.columns([1, 3])
     with col1:
-        if st.button("← Back to Dashboard", use_container_width=True):
+        if st.button("← Back to Dashboard", width="stretch"):
             st.session_state.current_page = "dashboard"
             st.rerun()
     
@@ -204,7 +204,7 @@ def _display_invoice_results_table(results: list) -> None:
         df = pd.DataFrame(df_rows)
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "File Name": st.column_config.TextColumn("File Name", width="medium"),
@@ -287,7 +287,7 @@ def _display_invoice_success(result: dict) -> None:
             products_df = pd.DataFrame(products_table)
             st.dataframe(
                 products_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "#": st.column_config.NumberColumn("#", width="small"),

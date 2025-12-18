@@ -18,6 +18,7 @@ from openpyxl.utils import get_column_letter
 from config.settings import azure_config
 from utils.ai_analyzer import analyze_tender_document, analyze_tender_with_fields
 from utils.pdf_processor import extract_text_from_pdf, get_text_length_info
+from utils.web_research import analyze_market_situation
 
 
 def render_tender_analysis_page():
@@ -57,7 +58,7 @@ def render_tender_analysis_page():
     template_structure = st.session_state.get("tender_template_structure")
     desired_fields = st.session_state.get("tender_desired_fields")
 
-    run_analysis = st.button("Analyze tender documents", use_container_width=True)
+    run_analysis = st.button("Analyze tender documents", width="stretch")
 
     if run_analysis:
         if not tender_files:
@@ -108,10 +109,34 @@ def render_tender_analysis_page():
                 analysis = analyze_tender_with_fields(extracted_text, desired_fields)
             else:
                 analysis = analyze_tender_document(extracted_text)
-            success = "error" not in analysis
+            success = analysis and "error" not in analysis
+            
+            if success:
+                try:
+                    status_placeholder.info(f"Researching market situation for {tender_file.name}...")
+                    extracted = analysis.get("extracted", {})
+                    customer = extracted.get("Kundenname", extracted.get("Auftraggeber", ""))
+                    project = extracted.get("Projekttitel", extracted.get("Leistungsbeschreibung", ""))
+                    country = extracted.get("Land", "Deutschland")
+                    
+                    if customer or project:
+                        market_analysis = analyze_market_situation(
+                            customer, project, country, azure_config.client
+                        )
+                        # Store market situation as extracted fields if they exist in template
+                        if "Vermutliche Wettbewerber" in extracted or "Letzter Tender" in extracted:
+                            extracted["Vermutliche Wettbewerber"] = market_analysis.get("Vermutliche Wettbewerber", "Nicht angegeben")
+                            extracted["Letzter Tender"] = market_analysis.get("Letzter Tender", "Nicht angegeben")
+                            extracted["Split möglich"] = market_analysis.get("Split möglich", "Nicht angegeben")
+                            extracted["Chancen in %"] = market_analysis.get("Chancen in %", "Nicht angegeben")
+                            analysis["extracted"] = extracted
+                        analysis["market_situation"] = market_analysis
+                except Exception as me:
+                    analysis["market_situation"] = {"error": f"Market research failed: {str(me)[:100]}"}
+            
             results.append({
                 "file_name": tender_file.name,
-                "analysis": analysis,
+                "analysis": analysis or {},
                 "success": success,
                 "text_length": length_info.get("length", len(extracted_text))
             })
@@ -152,7 +177,7 @@ def render_tender_analysis_page():
                     return [""] * len(row)
                 
                 styled = df.style.apply(highlight_row, axis=1)
-                st.dataframe(styled, use_container_width=True, hide_index=True)
+                st.dataframe(styled, width="stretch", hide_index=True)
                 
                 workbook = _fill_form_template(merged_result, tender_template, template_structure, source_files)
                 st.download_button(
@@ -162,7 +187,7 @@ def render_tender_analysis_page():
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="download_merged",
                     help=f"Filled tender form from {len(successful_results)} file(s).",
-                    use_container_width=True
+                    width="stretch"
                 )
         else:
             # Fallback: generic table-style export
@@ -174,7 +199,7 @@ def render_tender_analysis_page():
                     data=workbook.getvalue(),
                     file_name="tender_list_filled.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
+                    width="stretch",
                     help="First sheet contains the auto-filled entries."
                 )
 

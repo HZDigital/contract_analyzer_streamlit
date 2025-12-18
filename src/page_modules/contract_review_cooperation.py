@@ -62,7 +62,7 @@ def render_contract_review_cooperation_page():
     # Analysis button
     run_analysis = st.button(
         "Analyze & Compare Contracts",
-        use_container_width=True,
+        width="stretch",
     )
     
     if run_analysis:

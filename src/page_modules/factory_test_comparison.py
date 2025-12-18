@@ -48,7 +48,7 @@ def render_factory_test_comparison_page():
         help="Drop both specification PDFs and certificate PDFs here - AI will figure out which is which",
     )
 
-    if st.button("Analyze & Compare", use_container_width=True):
+    if st.button("Analyze & Compare", width="stretch"):
         _process_ai_comparison(uploaded_files )
 
 
@@ -217,7 +217,7 @@ def _display_smart_comparison_results(result: Dict[str, Any]):
         return [""] * len(row)
     
     styled = df.style.apply(highlight_row, axis=1)
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, width="stretch", hide_index=True)
     
     # Export
     st.markdown("### 📥 Export Results")

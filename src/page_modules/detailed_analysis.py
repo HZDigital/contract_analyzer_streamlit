@@ -15,7 +15,7 @@ def render_detailed_analysis_page():
     # Back button
     col1, col2 = st.columns([1, 3])
     with col1:
-        if st.button("← Back to Dashboard", use_container_width=True):
+        if st.button("← Back to Dashboard", width="stretch"):
             st.session_state.current_page = "dashboard"
             st.rerun()
     
@@ -213,7 +213,7 @@ def _display_structured_analysis(analysis):
                 "unit": "Unit",
                 "rate": "Rate/Price"
             },
-            use_container_width=True
+            width="stretch"
         )
         
         # CSV Export button for products/services

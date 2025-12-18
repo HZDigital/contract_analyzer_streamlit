@@ -133,7 +133,7 @@ def render_dashboard_home():
             if st.button(
                 f"{card['icon']}\n\n**{card['title']}**\n\n{card['desc']}", 
                 key=card['key'], 
-                use_container_width=True,
+                width="stretch",
                 type="secondary"
             ):
                 st.session_state.current_page = card['page']

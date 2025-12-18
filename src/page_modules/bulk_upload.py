@@ -15,7 +15,7 @@ def render_bulk_upload_page():
     # Back button
     col1, col2 = st.columns([1, 3])
     with col1:
-        if st.button("← Back to Dashboard", use_container_width=True):
+        if st.button("← Back to Dashboard", width="stretch"):
             st.session_state.current_page = "dashboard"
             st.rerun()
     
@@ -223,7 +223,7 @@ def _display_bulk_results():
 
     # Display pre-computed consolidated results
     if 'consolidated_results' in st.session_state and st.session_state.consolidated_results:
-        st.dataframe(pd.DataFrame(st.session_state.consolidated_results), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(st.session_state.consolidated_results), width="stretch", hide_index=True)
         st.success(f"✅ Found {len(st.session_state.consolidated_results)} product(s) ordered by multiple clients")
     else:
         st.info("No products were ordered by 2 or more different clients.")
@@ -284,7 +284,7 @@ def _display_successful_result(result):
             products_df = pd.DataFrame(products_table_data)
             st.dataframe(
                 products_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "#": st.column_config.NumberColumn("#", width="small"),
