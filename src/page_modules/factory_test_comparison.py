@@ -13,6 +13,14 @@ from __future__ import annotations
 
 import json
 from typing import Dict, Any
+from io import BytesIO
+import os
+import re
+from pathlib import Path
+from datetime import datetime
+from openpyxl import load_workbook
+from openpyxl.styles import Font
+
 
 import pandas as pd
 import streamlit as st
@@ -172,6 +180,40 @@ def _display_smart_comparison_results(result: Dict[str, Any]):
     """Display the AI comparison results."""
     st.markdown("## 📊 Analysis Results")
     
+    def _make_export_basename(res: Dict[str, Any]) -> str:
+        specs = res.get("identified_specs", []) or []
+        certs = res.get("identified_certificates", []) or []
+        names = [Path(n).stem for n in (specs + certs) if isinstance(n, str) and n]
+        if not names:
+            base = "analysis"
+        elif len(specs) == 1:
+            base = Path(specs[0]).stem
+        elif len(certs) == 1:
+            base = Path(certs[0]).stem
+        else:
+            cp = os.path.commonprefix(names)
+            cp = re.sub(r"[-_\s.]+$", "", cp)
+            if len(cp) >= 3:
+                base = cp
+            else:
+                token_lists = [re.findall(r"[A-Za-z0-9]+", n) for n in names]
+                counts = {}
+                for tokens in token_lists:
+                    seen = set()
+                    for t in tokens:
+                        if t in seen:
+                            continue
+                        seen.add(t)
+                        counts[t] = counts.get(t, 0) + 1
+                threshold = max(1, int(0.6 * len(names)))
+                first_tokens = token_lists[0] if token_lists else []
+                chosen = [t for t in first_tokens if counts.get(t, 0) >= threshold]
+                base = "-".join(chosen) if chosen else names[0]
+        base = re.sub(r"[^A-Za-z0-9._-]", "-", base)
+        base = re.sub(r"-+", "-", base).strip("-._")
+        date_tag = datetime.now().strftime("%Y%m%d")
+        return f"{base}-{date_tag}" if base else f"analysis-{date_tag}"
+    
     # Show document identification
     with st.expander("🔍 Document Identification", expanded=False):
         col1, col2 = st.columns(2)
@@ -228,10 +270,39 @@ def _display_smart_comparison_results(result: Dict[str, Any]):
     
     # Export
     st.markdown("### 📥 Export Results")
-    csv_bytes = df.to_csv(index=False, sep=";").encode("utf-8")
-    st.download_button(
-        label="Download Comparison CSV",
-        data=csv_bytes,
-        file_name="certificate_comparison.csv",
-        mime="text/csv",
-    )
+    export_base = _make_export_basename(result)
+    
+    def excel_highlight_row(row):
+        status = str(row.get("status", "")).upper()
+        if status == "OUT":
+            return ["background-color: #dc3545; border-left: 3px solid #dc3545"] * len(row)
+        if status == "MISSING":
+            return ["background-color: #ffc107; border-left: 3px solid #ffc107"] * len(row)
+        if status == "OK":
+            return ["background-color: #28a745; border-left: 3px solid #28a745"] * len(row)
+        return [""] * len(row)
+
+    excel_buffer = BytesIO()
+    try:
+        excel_styled = df.style.apply(excel_highlight_row, axis=1)
+        excel_styled.to_excel(excel_buffer, engine="openpyxl", index=False)
+
+        # Post-process with openpyxl to enforce a font that renders special characters well
+        excel_buffer.seek(0)
+        wb = load_workbook(excel_buffer)
+        ws = wb.active
+        default_font = Font(name="Calibri")
+        for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+            for cell in row:
+                cell.font = default_font
+
+        final_buffer = BytesIO()
+        wb.save(final_buffer)
+        st.download_button(
+            label="Download Comparison Excel",
+            data=final_buffer.getvalue(),
+            file_name=f"{export_base}_comparison.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    except Exception as e:
+        st.warning(f"Excel export unavailable: {e}")
