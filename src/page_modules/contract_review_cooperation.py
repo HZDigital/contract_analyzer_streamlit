@@ -101,9 +101,9 @@ def render_contract_review_cooperation_page():
             analysis_result = compare_contracts(
                 merged_supplier_text,
                 standard_text,
-                include_risk_assessment=include_risk_assessment,
-                include_deviation_analysis=include_deviation_analysis,
-                include_recommendations=include_recommendations
+                include_risk_assessment=True,
+                include_deviation_analysis=True,
+                include_recommendations=True
             )
         
         # Store result in session

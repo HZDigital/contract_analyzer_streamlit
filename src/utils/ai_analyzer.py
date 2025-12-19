@@ -102,7 +102,7 @@ def extract_client_and_products(text: str) -> Dict[str, Any]:
         
     Returns:
         dict: Extracted information in structured format
-    """
+    """ 
     if not azure_config.client:
         return {
             "client_name": "❌ Credentials not configured",
