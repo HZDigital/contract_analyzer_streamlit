@@ -50,7 +50,10 @@ def render_factory_test_comparison_page():
 
     if st.button("Analyze & Compare", width="stretch"):
         _process_ai_comparison(uploaded_files )
-
+    
+    # Display results from session state if available
+    if "comparison_result" in st.session_state and st.session_state.comparison_result:
+        _display_smart_comparison_results(st.session_state.comparison_result)
 
 def _process_ai_comparison(uploaded_files):
     """Process all PDFs and let AI do the identification and comparison."""
@@ -85,8 +88,12 @@ def _process_ai_comparison(uploaded_files):
     
     status.text("Analysis complete! ✅")
     
-    # Display results
-    _display_smart_comparison_results(comparison_result)
+    # Store results in session state for persistence across reruns
+    st.session_state.comparison_result = comparison_result
+    
+    # Rerun to display results from session state
+    st.rerun()
+
 
 
 def _ai_smart_compare(file_texts: Dict[str, str]) -> Dict[str, Any]:
