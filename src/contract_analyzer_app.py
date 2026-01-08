@@ -22,15 +22,32 @@ from page_modules.use_cases_page import render_use_cases_page
 def is_auth_configured() -> bool:
     """Check if Streamlit auth provider is configured in secrets.toml."""
     try:
-        auth = st.secrets["auth"]
+        auth = st.secrets.get("auth", {})
+        if not auth:
+            return False
+        
         redirect_uri = auth.get("redirect_uri")
         cookie_secret = auth.get("cookie_secret")
         provider = auth.get("microsoft", {})
         client_id = provider.get("client_id")
         client_secret = provider.get("client_secret")
         metadata_url = provider.get("server_metadata_url")
-        return bool(redirect_uri and cookie_secret and client_id and client_secret and metadata_url)
-    except Exception:
+        
+        all_present = bool(redirect_uri and cookie_secret and client_id and client_secret and metadata_url)
+        
+        if not all_present:
+            st.sidebar.warning(
+                "⚠️ Auth config incomplete: "
+                f"redirect_uri={bool(redirect_uri)}, "
+                f"cookie_secret={bool(cookie_secret)}, "
+                f"client_id={bool(client_id)}, "
+                f"client_secret={bool(client_secret)}, "
+                f"metadata_url={bool(metadata_url)}"
+            )
+        
+        return all_present
+    except Exception as e:
+        st.sidebar.error(f"Error reading auth secrets: {e}")
         return False
 
 def validate_token_from_parent(token: str) -> bool:
@@ -101,7 +118,7 @@ def main():
             st.stop()
     
 
-    
+
 
     # Check if user is logged in via Streamlit's built-in auth
     is_streamlit_logged_in = False
@@ -136,10 +153,15 @@ def main():
                         use_container_width=True, 
                         type="primary"
                     )
-                except AttributeError:
+                except Exception as e:
                     st.error(
-                        "⚠️ Your Streamlit version may not support built-in auth.\n"
-                        "Please upgrade Streamlit to the latest version."
+                        f"⚠️ Login error: {type(e).__name__}\n\n"
+                        f"Details: {str(e)}\n\n"
+                        "This may indicate a Streamlit version issue or secrets configuration problem.\n\n"
+                        "Try:\n"
+                        "1. `pip install --upgrade streamlit Authlib`\n"
+                        "2. Verify `.streamlit/secrets.toml` contains all required fields\n"
+                        "3. Check container logs for startup messages"
                     )
             else:
                 st.error(
