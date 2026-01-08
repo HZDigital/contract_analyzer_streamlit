@@ -15,6 +15,28 @@ from openai import AzureOpenAI
 load_dotenv()
 
 
+class AppConfig:
+    """Application configuration for page availability."""
+    
+    def __init__(self):
+        # Get environment mode from environment variable
+        # Set APP_ENVIRONMENT to 'mehler' to show only dashboard and use cases
+        # Any other value (or unset) will show all pages
+        self.environment = os.environ.get("APP_ENVIRONMENT", "full")
+    
+    @property
+    def is_mehler_mode(self) -> bool:
+        """Check if app is in 'mehler' mode (only dashboard and use cases)."""
+        return self.environment.lower() == "mehler"
+    
+    def get_available_pages(self) -> list:
+        """Get list of available page identifiers based on environment."""
+        if self.is_mehler_mode:
+            return ["dashboard", "mehler_cases"] 
+        else:
+            return ["dashboard", "product_detection", "invoice_detection", "detailed_analysis", "mehler_cases"]
+
+
 class AzureConfig:
     """Azure OpenAI configuration and client management."""
     
@@ -57,5 +79,6 @@ class AzureConfig:
             )
 
 
-# Global configuration instance
+# Global configuration instances
+app_config = AppConfig()
 azure_config = AzureConfig()

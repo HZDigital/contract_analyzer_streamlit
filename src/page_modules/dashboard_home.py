@@ -7,6 +7,7 @@ contract analysis tools and features.
 
 import streamlit as st
 from datetime import datetime
+from config.settings import app_config
 
 def render_dashboard_home():
     """Render the main dashboard home page."""
@@ -95,7 +96,10 @@ def render_dashboard_home():
     </style>
     """, unsafe_allow_html=True)
 
-    card_data = [
+    # Get available pages based on environment
+    available_pages = app_config.get_available_pages()
+    
+    all_card_data = [
         {
             "icon": "📦",
             "title": "Product Request Detection",
@@ -125,10 +129,15 @@ def render_dashboard_home():
             "page": "mehler_cases"
         },
     ]
-
-    cols = st.columns(4)
+    
+    # Filter cards based on available pages
+    card_data = [card for card in all_card_data if card["page"] in available_pages]
+    
+    # Adjust column count based on number of cards
+    num_cols = min(len(card_data), 4)
+    cols = st.columns(num_cols)
     for i, card in enumerate(card_data):
-        with cols[i % 4]:
+        with cols[i % num_cols]:
             # Use st.button with custom styling to make entire card clickable
             if st.button(
                 f"{card['icon']}\n\n**{card['title']}**\n\n{card['desc']}", 

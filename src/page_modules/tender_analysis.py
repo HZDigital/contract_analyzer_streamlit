@@ -166,7 +166,8 @@ def render_tender_analysis_page():
 
                 # Display merged fields in table format (Feld | Wert)
                 extracted = merged_analysis.get("extracted", {})
-                field_items = list(extracted.items())
+                # Ensure values are Arrow/Excel safe for display
+                field_items = [(k, _format_cell_value(v)) for k, v in extracted.items()]
                 df = pd.DataFrame(field_items)
                 df.columns = ["Feld", "Wert"]
 
@@ -308,7 +309,7 @@ def _fill_form_template(result: dict, template_file, template_structure: dict, s
     # Fill each field
     field_map = template_structure['field_map']
     for field_name, position in field_map.items():
-        value = extracted.get(field_name, "Nicht angegeben")
+        value = _format_cell_value(extracted.get(field_name, "Nicht angegeben"))
         source_file = field_sources.get(field_name, "")
         
         # Excel uses 1-based indexing, pandas uses 0-based
@@ -493,3 +494,47 @@ def _map_row_to_default(row: dict, columns: list) -> dict:
         else:
             ordered.append("")
     return dict(zip(columns, ordered))
+
+
+def _format_cell_value(value):
+    """Convert arbitrary extracted values into Excel/Arrow safe strings.
+    - Lists/Tuples/Sets -> bullet-separated lines
+    - Dicts -> key: value lines
+    - Bytes -> UTF-8 decoded
+    - Other non-scalar -> stringified
+    - Scalars (int/float/str/None) -> as-is or string
+    """
+    if value is None:
+        return ""
+    # Decode bytes
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return value.decode("utf-8", errors="ignore")
+        except Exception:
+            return str(value)
+    # Collections
+    if isinstance(value, (list, tuple, set)):
+        parts = []
+        for item in value:
+            if isinstance(item, (dict, list, tuple, set)):
+                parts.append(str(item))
+            elif isinstance(item, (bytes, bytearray)):
+                try:
+                    parts.append(item.decode("utf-8", errors="ignore"))
+                except Exception:
+                    parts.append(str(item))
+            else:
+                parts.append(str(item))
+        # Use newline for readability in Excel/Streamlit
+        return "\n".join(parts)
+    if isinstance(value, dict):
+        try:
+            return "\n".join(f"{k}: {v}" for k, v in value.items())
+        except Exception:
+            return str(value)
+    # Scalars
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        return value
+    return str(value)

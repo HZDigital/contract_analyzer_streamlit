@@ -10,7 +10,7 @@ import os
 # Add src directory to Python path for imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from config.settings import azure_config
+from config.settings import azure_config, app_config
 from page_modules.dashboard_home import render_dashboard_home
 from page_modules.bulk_upload import render_bulk_upload_page
 from page_modules.detailed_analysis import render_detailed_analysis_page
@@ -46,16 +46,24 @@ def main():
     if "current_page" not in st.session_state:
         st.session_state.current_page = "dashboard"
     
+    # Get available pages based on environment
+    available_pages = app_config.get_available_pages()
+    
+    # Check if current page is allowed, redirect to dashboard if not
+    if st.session_state.current_page not in available_pages:
+        st.session_state.current_page = "dashboard"
+        st.rerun()
+    
     # Route to appropriate page based on session state
     if st.session_state.current_page == "dashboard":
         render_dashboard_home()
-    elif st.session_state.current_page == "product_detection":
+    elif st.session_state.current_page == "product_detection" and "product_detection" in available_pages:
         render_bulk_upload_page()
-    elif st.session_state.current_page == "invoice_detection":
+    elif st.session_state.current_page == "invoice_detection" and "invoice_detection" in available_pages:
         render_invoice_upload_page()
-    elif st.session_state.current_page == "detailed_analysis":
+    elif st.session_state.current_page == "detailed_analysis" and "detailed_analysis" in available_pages:
         render_detailed_analysis_page()
-    elif st.session_state.current_page == "mehler_cases":
+    elif st.session_state.current_page == "mehler_cases"  and "mehler_cases" in available_pages:
         render_use_cases_page()
 
 

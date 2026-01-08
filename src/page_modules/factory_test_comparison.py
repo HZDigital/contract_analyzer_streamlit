@@ -236,7 +236,10 @@ def _display_smart_comparison_results(result: Dict[str, Any]):
         st.warning("No comparisons found.")
         return
     
-    df = pd.DataFrame(comparisons)
+    df = pd.DataFrame(comparisons)    # Normalize numeric columns to avoid Arrow conversion issues from stray strings
+    for col in ["spec_min", "spec_max", "spec_nominal", "measured_value"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     
     # Calculate metrics
     ok_count = (df["status"].str.upper() == "OK").sum()
