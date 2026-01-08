@@ -18,3 +18,5 @@ einops
 easydict
 timm
 openpyxl
+requests
+Authlib>=1.3.2

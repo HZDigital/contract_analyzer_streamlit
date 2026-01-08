@@ -26,5 +26,9 @@ ENV PYTHONPATH=/app
 # Expose Streamlit port
 EXPOSE 8501
 
-# Command to run the app
-CMD ["streamlit", "run", "src/contract_analyzer_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Copy startup script
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
+# Command to run the app via startup script (creates secrets.toml from env vars)
+CMD ["/app/start.sh"]
