@@ -12,43 +12,12 @@ import requests
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config.settings import azure_config, app_config
+from config.msal_config import msal_config
 from page_modules.dashboard_home import render_dashboard_home
 from page_modules.bulk_upload import render_bulk_upload_page
 from page_modules.detailed_analysis import render_detailed_analysis_page
 from page_modules.invoice_upload import render_invoice_upload_page
 from page_modules.use_cases_page import render_use_cases_page
-
-
-def is_auth_configured() -> bool:
-    """Check if Streamlit auth provider is configured in secrets.toml."""
-    try:
-        auth = st.secrets.get("auth", {})
-        if not auth:
-            return False
-        
-        redirect_uri = auth.get("redirect_uri")
-        cookie_secret = auth.get("cookie_secret")
-        provider = auth.get("microsoft", {})
-        client_id = provider.get("client_id")
-        client_secret = provider.get("client_secret")
-        metadata_url = provider.get("server_metadata_url")
-        
-        all_present = bool(redirect_uri and cookie_secret and client_id and client_secret and metadata_url)
-        
-        if not all_present:
-            st.sidebar.warning(
-                "⚠️ Auth config incomplete: "
-                f"redirect_uri={bool(redirect_uri)}, "
-                f"cookie_secret={bool(cookie_secret)}, "
-                f"client_id={bool(client_id)}, "
-                f"client_secret={bool(client_secret)}, "
-                f"metadata_url={bool(metadata_url)}"
-            )
-        
-        return all_present
-    except Exception as e:
-        st.sidebar.error(f"Error reading auth secrets: {e}")
-        return False
 
 def validate_token_from_parent(token: str) -> bool:
     """Validate access token from parent React application."""
@@ -100,13 +69,8 @@ def main():
     # Check if authentication is disabled
     auth_disabled = os.environ.get("AUTH_DISABLED", "false").lower() == "true"
     
-    # Initialize all required session state variables FIRST
-    if "auth_user" not in st.session_state:
-        st.session_state.auth_user = None
-    if "auth_initialized" not in st.session_state:
-        st.session_state.auth_initialized = True
-    if "login_attempted" not in st.session_state:
-        st.session_state.login_attempted = False
+    # Initialize MSAL config session
+    msal_config.initialize_session()
     
     # Handle token from parent React application (iframe scenario)
     query_params = st.query_params
@@ -121,95 +85,21 @@ def main():
             st.error("Invalid or expired token. Please try again.")
             st.stop()
     
-
-
-
-    # Check if user is logged in via Streamlit's built-in auth
-    is_streamlit_logged_in = False
-    try:
-        is_streamlit_logged_in = st.user.is_logged_in
-    except AttributeError:
-        # st.user.is_logged_in not available (older Streamlit version or auth not configured)
-        pass
+    # Handle OAuth callback from Microsoft
+    if "code" in query_params and not auth_disabled:
+        msal_config.handle_callback()
     
-    # Handle authentication for direct users
-    if not auth_disabled and not st.session_state.auth_user and not is_streamlit_logged_in:
-        # Show login page for direct access
-        st.markdown(
-            """
-            <div style="text-align: center; margin: 100px 0;">
-                <h1 style="color: #FF6B6B;">Contract Analyzer</h1>
-                <p style="font-size: 1.2em; color: #666;">Please log in to continue</p>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col2:
-            if is_auth_configured():
-                # Only render login button if Streamlit auth is available
-                try:
-                    # Handle login with proper error handling
-                    if st.button(
-                        "🔐 Login with Microsoft",
-                        use_container_width=True, 
-                        type="primary",
-                        key="microsoft_login_btn"
-                    ):
-                        try:
-                            # Mark login attempt
-                            st.session_state.login_attempted = True
-                            # Call st.login with the provider
-                            st.login("microsoft")
-                        except AttributeError as attr_err:
-                            st.error(
-                                f"⚠️ Authentication method not available.\n\n"
-                                f"Error: {str(attr_err)}\n\n"
-                            )
-                        except Exception as login_err:
-                            st.error(
-                                f"⚠️ Login error: {type(login_err).__name__}\n\n"
-                                f"Details: {str(login_err)}\n\n"
-                            )
-                except Exception as e:
-                    st.error(
-                        f"⚠️ Button rendering error: {type(e).__name__}\n\n"
-                        f"Details: {str(e)}"
-                    )
-            else:
-                st.error(
-                    "⚠️ Authentication provider not configured.\n\n"
-                    "Ensure `.streamlit/secrets.toml` contains [auth] and [auth.microsoft] with `redirect_uri`, `cookie_secret`,\n"
-                    "`client_id`, `client_secret`, and `server_metadata_url`."
-                )
+    # Check if authentication is required and user is not authenticated
+    if not auth_disabled and not msal_config.is_authenticated():
+        # Show login page
+        msal_config.render_login_page()
         st.stop()
-    
-    # Handle Streamlit's built-in login for direct users
-    if is_streamlit_logged_in and not st.session_state.auth_user:
-        try:
-            st.session_state.auth_user = {
-                "name": st.user.name,
-                "email": st.user.email,
-                "from_parent": False
-            }
-        except AttributeError:
-            pass
     
     # Show credentials warning if needed
     azure_config.show_credentials_warning()
     
-    # Show user info if logged in
-    if st.session_state.auth_user:
-        with st.sidebar:
-            st.markdown("---")
-            st.markdown(f"**User:** {st.session_state.auth_user.get('name', 'Unknown')}")
-            st.markdown(f"**Email:** {st.session_state.auth_user.get('email', 'N/A')}")
-            
-            # Only show logout for direct users (not from parent)
-            if not st.session_state.auth_user.get("from_parent"):
-                if st.button("Logout", key="logout_btn"):
-                    st.logout()
+    # Show user info and render user menu
+    msal_config.render_user_menu()
     
     # Initialize session state for page navigation
     if "current_page" not in st.session_state:
