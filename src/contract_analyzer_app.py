@@ -100,9 +100,13 @@ def main():
     # Check if authentication is disabled
     auth_disabled = os.environ.get("AUTH_DISABLED", "false").lower() == "true"
     
-    # Initialize session state
+    # Initialize all required session state variables FIRST
     if "auth_user" not in st.session_state:
         st.session_state.auth_user = None
+    if "auth_initialized" not in st.session_state:
+        st.session_state.auth_initialized = True
+    if "login_attempted" not in st.session_state:
+        st.session_state.login_attempted = False
     
     # Handle token from parent React application (iframe scenario)
     query_params = st.query_params
@@ -146,22 +150,37 @@ def main():
             if is_auth_configured():
                 # Only render login button if Streamlit auth is available
                 try:
-                    st.button(
-                        "🔐 Login with Microsoft", 
-                        on_click=st.login, 
-                        args=["microsoft"],
+                    # Handle login with proper error handling
+                    if st.button(
+                        "🔐 Login with Microsoft",
                         use_container_width=True, 
-                        type="primary"
-                    )
+                        type="primary",
+                        key="microsoft_login_btn"
+                    ):
+                        try:
+                            # Mark login attempt
+                            st.session_state.login_attempted = True
+                            # Call st.login with the provider
+                            st.login("microsoft")
+                        except AttributeError as attr_err:
+                            st.error(
+                                f"⚠️ Authentication method not available.\n\n"
+                                f"Error: {str(attr_err)}\n\n"
+                                "This usually means:\n"
+                                "1. Streamlit version doesn't support built-in OAuth (need >= 1.33.0)\n"
+                                "2. Authentication secrets are not properly configured\n\n"
+                                f"Configured: redirect_uri, cookie_secret, client_id, client_secret, metadata_url"
+                            )
+                        except Exception as login_err:
+                            st.error(
+                                f"⚠️ Login error: {type(login_err).__name__}\n\n"
+                                f"Details: {str(login_err)}\n\n"
+                                "Check that all authentication settings are correct in secrets.toml"
+                            )
                 except Exception as e:
                     st.error(
-                        f"⚠️ Login error: {type(e).__name__}\n\n"
-                        f"Details: {str(e)}\n\n"
-                        "This may indicate a Streamlit version issue or secrets configuration problem.\n\n"
-                        "Try:\n"
-                        "1. `pip install --upgrade streamlit Authlib`\n"
-                        "2. Verify `.streamlit/secrets.toml` contains all required fields\n"
-                        "3. Check container logs for startup messages"
+                        f"⚠️ Button rendering error: {type(e).__name__}\n\n"
+                        f"Details: {str(e)}"
                     )
             else:
                 st.error(
