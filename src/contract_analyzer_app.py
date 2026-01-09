@@ -166,16 +166,11 @@ def main():
                             st.error(
                                 f"⚠️ Authentication method not available.\n\n"
                                 f"Error: {str(attr_err)}\n\n"
-                                "This usually means:\n"
-                                "1. Streamlit version doesn't support built-in OAuth (need >= 1.33.0)\n"
-                                "2. Authentication secrets are not properly configured\n\n"
-                                f"Configured: redirect_uri, cookie_secret, client_id, client_secret, metadata_url"
                             )
                         except Exception as login_err:
                             st.error(
                                 f"⚠️ Login error: {type(login_err).__name__}\n\n"
                                 f"Details: {str(login_err)}\n\n"
-                                "Check that all authentication settings are correct in secrets.toml"
                             )
                 except Exception as e:
                     st.error(
