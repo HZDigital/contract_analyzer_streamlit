@@ -10,6 +10,7 @@ import streamlit as st
 import msal
 import requests
 import secrets
+from config.settings import app_config
 
 
 class MSALConfig:
@@ -211,31 +212,56 @@ class MSALConfig:
             st.error(f"Authentication error: {error} - {error_desc}")
     
     def render_login_page(self):
-        """Render a login page with Microsoft login button."""
+        """Render a login page with Microsoft login button and email/password login."""
         st.markdown(
             """
             <div style="text-align: center; margin: 100px 0;">
                 <h1 style="color: #FF6B6B;">Contract Analyzer</h1>
-                <p style="font-size: 1.2em; color: #666;">Please log in to continue</p>
             </div>
             """,
             unsafe_allow_html=True
         )
         
-        # Create a login button
+        # Check if we're in mehler mode (allows email/password login)
+        is_mehler = app_config.is_mehler_mode
+        
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
-            if st.button("🔐 Login with Microsoft", use_container_width=True, type="primary"):
-                # Generate authorization URL and redirect
-                auth_url = self.get_authorization_url()
-                if auth_url:
-                    st.markdown(
-                        f'<meta http-equiv="refresh" content="0; url={auth_url}">',
-                        unsafe_allow_html=True
-                    )
-                    st.stop()
-                else:
-                    st.error("Failed to generate authorization URL. Check configuration.")
+            # Create tabs for login methods
+            if is_mehler:
+                    email_input = st.text_input("Email", placeholder="mehlers.usecase@hz.digital")
+                    password_input = st.text_input("Password", type="password", placeholder="Enter password")
+                    
+                    if st.button("Login", use_container_width=True, type="primary", key="email_login_btn"):
+                        # Hardcoded credentials for mehler environment
+                        valid_email = "mehlers.usecase@hz.digital"
+                        valid_password = "h2X^TVA,R=xW>nv,"
+                        
+                        if email_input == valid_email and password_input == valid_password:
+                            # Set authenticated user
+                            st.session_state.auth_user = {
+                                "name": "Mehler User",
+                                "email": email_input,
+                                "sub": "mehler_user_id",
+                                "from_email_login": True
+                            }
+                            st.session_state.auth_token = "mehler_token"
+                            st.rerun()
+                        else:
+                            st.error("Invalid email or password")
+            else:
+                # Only Microsoft login in non-mehler environments
+                if st.button("🔐 Login with Microsoft", use_container_width=True, type="primary"):
+                    # Generate authorization URL and redirect
+                    auth_url = self.get_authorization_url()
+                    if auth_url:
+                        st.markdown(
+                            f'<meta http-equiv="refresh" content="0; url={auth_url}">',
+                            unsafe_allow_html=True
+                        )
+                        st.stop()
+                    else:
+                        st.error("Failed to generate authorization URL. Check configuration.")
     
     def render_user_menu(self):
         """Render user menu in the app."""
