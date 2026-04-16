@@ -34,7 +34,14 @@ class AppConfig:
         if self.is_mehler_mode:
             return ["dashboard", "mehler_cases"] 
         else:
-            return ["dashboard", "product_detection", "invoice_detection", "detailed_analysis", "mehler_cases"]
+            return [
+                "dashboard",
+                "product_detection",
+                "invoice_detection",
+                "invoice_normalstunden_extraction",
+                "detailed_analysis",
+                "mehler_cases",
+            ]
 
 
 class AzureConfig:

@@ -17,6 +17,9 @@ from page_modules.dashboard_home import render_dashboard_home
 from page_modules.bulk_upload import render_bulk_upload_page
 from page_modules.detailed_analysis import render_detailed_analysis_page
 from page_modules.invoice_upload import render_invoice_upload_page
+from page_modules.invoice_normalstunden_extraction import (
+    render_invoice_normalstunden_extraction_page,
+)
 from page_modules.use_cases_page import render_use_cases_page
 
 def validate_token_from_parent(token: str) -> bool:
@@ -120,6 +123,11 @@ def main():
         render_bulk_upload_page()
     elif st.session_state.current_page == "invoice_detection" and "invoice_detection" in available_pages:
         render_invoice_upload_page()
+    elif (
+        st.session_state.current_page == "invoice_normalstunden_extraction"
+        and "invoice_normalstunden_extraction" in available_pages
+    ):
+        render_invoice_normalstunden_extraction_page()
     elif st.session_state.current_page == "detailed_analysis" and "detailed_analysis" in available_pages:
         render_detailed_analysis_page()
     elif st.session_state.current_page == "mehler_cases"  and "mehler_cases" in available_pages:

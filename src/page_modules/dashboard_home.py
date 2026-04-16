@@ -115,6 +115,13 @@ def render_dashboard_home():
             "page": "invoice_detection"
         },
         {
+            "icon": "📊",
+            "title": "Invoice Normalstunden Extraction",
+            "desc": "",
+            "key": "btn_invoice_normalstunden",
+            "page": "invoice_normalstunden_extraction"
+        },
+        {
             "icon": "📋",
             "title": "Detailed Contract Analysis",
             "desc": "",
