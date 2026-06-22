@@ -60,11 +60,16 @@ def extract_text_from_pdf(file: Union[BinaryIO, bytes]) -> str:
         tmp_path = tmp.name
 
     try:
-        # Try native text extraction first (default)
+        # Try native text extraction first, but OCR image-only pages in mixed PDFs.
         doc = fitz.open(tmp_path)
         full_text = ""
-        for page in doc:
-            full_text += page.get_text()
+        for page_num, page in enumerate(doc, 1):
+            page_text = page.get_text()
+            if _should_ocr_page(page, page_text):
+                ocr_text = _extract_text_from_page_with_ocr(page, page_num)
+                full_text += ocr_text if ocr_text.strip() else page_text
+            else:
+                full_text += page_text
         doc.close()
         
         # If no text was extracted, fallback to OCR
@@ -97,61 +102,9 @@ def _extract_text_with_ocr(pdf_path: str) -> str:
         ocr_text = ""
 
         for page_num, page in enumerate(doc, 1):
-            # Render at high DPI (300) for scanned documents
-            mat = fitz.Matrix(300/72, 300/72)  # 300 DPI
-            pix = page.get_pixmap(matrix=mat)
-            image = Image.open(BytesIO(pix.tobytes("png")))
-            
-            page_text = ""
-            
-            # Try DeepSeek-OCR via transformers first (if available)
-            if _transformers_available:
-                try:
-                    global _deepseek_model, _deepseek_tokenizer
-                    if _deepseek_model is None:
-                        _deepseek_tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-OCR", trust_remote_code=True)
-                        _deepseek_model = AutoModel.from_pretrained(
-                            "deepseek-ai/DeepSeek-OCR",
-                            trust_remote_code=True,
-                            use_safetensors=True,
-                            device_map="auto"  # Auto-detect GPU/CPU
-                        )
-                        _deepseek_model = _deepseek_model.eval()
-                    
-                    # Save image temporarily for model.infer
-                    temp_img_path = os.path.join(tempfile.gettempdir(), f"temp_page_{page_num}.png")
-                    image.save(temp_img_path)
-                    
-                    prompt = "<image>\n<|grounding|>Convert the document to markdown. "
-                    result = _deepseek_model.infer(
-                        _deepseek_tokenizer,
-                        prompt=prompt,
-                        image_file=temp_img_path,
-                        base_size=1024,
-                        image_size=640,
-                        crop_mode=True
-                    )
-                    
-                    if result:
-                        page_text = str(result).strip()
-                        if page_text:
-                            ocr_text += page_text + "\n"
-                            if os.path.exists(temp_img_path):
-                                os.remove(temp_img_path)
-                            continue
-                    
-                    if os.path.exists(temp_img_path):
-                        os.remove(temp_img_path)
-                except Exception as ds_err:  # noqa: BLE001
-                    pass  # Fall back to Tesseract
-
-            # Fall back to Tesseract
-            try:
-                page_text = pytesseract.image_to_string(image).strip()
-                if page_text:
-                    ocr_text += page_text + "\n"
-            except Exception:  # noqa: BLE001
-                pass  # Skip page if both fail
+            page_text = _extract_text_from_page_with_ocr(page, page_num)
+            if page_text:
+                ocr_text += page_text + "\n"
 
         return ocr_text if ocr_text.strip() else "[OCR Error: No text extracted from any page]"
     except Exception as ocr_err:  # noqa: BLE001
@@ -159,6 +112,57 @@ def _extract_text_with_ocr(pdf_path: str) -> str:
     finally:
         if doc is not None:
             doc.close()
+
+
+def _should_ocr_page(page, page_text: str) -> bool:
+    """OCR pages that are mostly image content with no useful text layer."""
+    return bool(page.get_images(full=True)) and len(page_text.strip()) < 30
+
+
+def _extract_text_from_page_with_ocr(page, page_num: int) -> str:
+    """Extract text from one rendered PDF page using OCR."""
+    # Render at high DPI (300) for scanned documents.
+    mat = fitz.Matrix(300/72, 300/72)  # 300 DPI
+    pix = page.get_pixmap(matrix=mat)
+    image = Image.open(BytesIO(pix.tobytes("png")))
+
+    if _transformers_available:
+        try:
+            global _deepseek_model, _deepseek_tokenizer
+            if _deepseek_model is None:
+                _deepseek_tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-OCR", trust_remote_code=True)
+                _deepseek_model = AutoModel.from_pretrained(
+                    "deepseek-ai/DeepSeek-OCR",
+                    trust_remote_code=True,
+                    use_safetensors=True,
+                    device_map="auto"  # Auto-detect GPU/CPU
+                )
+                _deepseek_model = _deepseek_model.eval()
+
+            temp_img_path = os.path.join(tempfile.gettempdir(), f"temp_page_{page_num}.png")
+            image.save(temp_img_path)
+
+            prompt = "<image>\n<|grounding|>Convert the document to markdown. "
+            result = _deepseek_model.infer(
+                _deepseek_tokenizer,
+                prompt=prompt,
+                image_file=temp_img_path,
+                base_size=1024,
+                image_size=640,
+                crop_mode=True
+            )
+
+            if os.path.exists(temp_img_path):
+                os.remove(temp_img_path)
+            if result:
+                return str(result).strip()
+        except Exception:  # noqa: BLE001
+            pass  # Fall back to Tesseract
+
+    try:
+        return pytesseract.image_to_string(image).strip()
+    except Exception:  # noqa: BLE001
+        return ""
 
 def get_text_length_info(text: str) -> dict:
     """
