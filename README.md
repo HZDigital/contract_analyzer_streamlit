@@ -88,8 +88,18 @@ This application helps legal professionals and business users analyze contract d
 4. Review the analysis which includes:
    - Contract summary
    - Key clauses with direct quotes
-   - Identified risks or unusual language
-   - Contract dates
+    - Identified risks or unusual language
+    - Contract dates
+
+## Invoice Batch Processing
+
+For large invoice batches, use the local batch script instead of the Streamlit upload page:
+
+```bash
+python scripts/process_invoices_to_csv.py
+```
+
+The script reads PDFs from `input/`, writes `invoice_results_table.csv`, and can resume if interrupted. See `INVOICE_BATCH_PROCESSING.md` for setup and sharing instructions.
 
 ## Configuration
 

@@ -176,3 +176,4 @@ cython_debug/
 .streamlit/
 
 input/
+invoice_results_table*.csv
