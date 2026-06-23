@@ -23,6 +23,84 @@ _deepseek_model = None
 _deepseek_tokenizer = None
 
 
+def _read_uploaded_bytes(file: Union[BinaryIO, bytes]) -> Optional[bytes]:
+    """Read bytes from Streamlit uploads, file-like objects, or raw bytes."""
+    if isinstance(file, (bytes, bytearray)):
+        return bytes(file)
+    if hasattr(file, "getvalue") and callable(getattr(file, "getvalue")):
+        return file.getvalue()
+    if hasattr(file, "read") and callable(getattr(file, "read")):
+        try:
+            if hasattr(file, "seek") and callable(getattr(file, "seek")):
+                file.seek(0)
+        except Exception:
+            pass
+        return file.read()
+    return None
+
+
+def extract_pdf_pages(file: Union[BinaryIO, bytes]) -> list[dict]:
+    """
+    Extract PDF text as page-level records for large-contract analysis.
+
+    Returns:
+        list[dict]: Records with page, text, extraction_method, and char_count.
+    """
+    try:
+        pdf_bytes = _read_uploaded_bytes(file)
+    except Exception as e:
+        return [{"page": 0, "text": f"[PDF Read Error: {e}]", "extraction_method": "error", "char_count": 0}]
+
+    if not pdf_bytes:
+        return [{"page": 0, "text": "[PDF Error: Empty upload]", "extraction_method": "error", "char_count": 0}]
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(pdf_bytes)
+        tmp_path = tmp.name
+
+    doc = None
+    pages = []
+    try:
+        doc = fitz.open(tmp_path)
+        for page_num, page in enumerate(doc, 1):
+            page_text = page.get_text()
+            extraction_method = "native"
+            if _should_ocr_page(page, page_text):
+                ocr_text = _extract_text_from_page_with_ocr(page, page_num)
+                if ocr_text.strip():
+                    page_text = ocr_text
+                    extraction_method = "ocr"
+                else:
+                    extraction_method = "native_empty_ocr_failed"
+
+            pages.append({
+                "page": page_num,
+                "text": page_text,
+                "extraction_method": extraction_method,
+                "char_count": len(page_text),
+            })
+
+        if not any(page["text"].strip() for page in pages):
+            pages = []
+            for page_num, page in enumerate(doc, 1):
+                page_text = _extract_text_from_page_with_ocr(page, page_num)
+                pages.append({
+                    "page": page_num,
+                    "text": page_text,
+                    "extraction_method": "ocr",
+                    "char_count": len(page_text),
+                })
+    except Exception as e:
+        return [{"page": 0, "text": f"[PDF Error: {e}]", "extraction_method": "error", "char_count": 0}]
+    finally:
+        if doc is not None:
+            doc.close()
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    return pages
+
+
 def extract_text_from_pdf(file: Union[BinaryIO, bytes]) -> str:
     """
     Extract text from a PDF file using various methods.
@@ -34,19 +112,8 @@ def extract_text_from_pdf(file: Union[BinaryIO, bytes]) -> str:
         str: Extracted text content
     """
     # Obtain PDF bytes robustly (handles Streamlit UploadedFile)
-    pdf_bytes: Optional[bytes] = None
     try:
-        if isinstance(file, (bytes, bytearray)):
-            pdf_bytes = bytes(file)
-        elif hasattr(file, "getvalue") and callable(getattr(file, "getvalue")):
-            pdf_bytes = file.getvalue()
-        elif hasattr(file, "read") and callable(getattr(file, "read")):
-            try:
-                if hasattr(file, "seek") and callable(getattr(file, "seek")):
-                    file.seek(0)
-            except Exception:
-                pass
-            pdf_bytes = file.read()
+        pdf_bytes = _read_uploaded_bytes(file)
     except Exception as e:
         return f"[PDF Read Error: {e}]"
 

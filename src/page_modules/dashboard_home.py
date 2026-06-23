@@ -135,6 +135,13 @@ def render_dashboard_home():
             "key": "btn_mehler",
             "page": "mehler_cases"
         },
+        {
+            "icon": "📑",
+            "title": "Large_Contract_Scanner",
+            "desc": "",
+            "key": "btn_large_contract_scanner",
+            "page": "large_contract_scanner"
+        },
     ]
     
     # Filter cards based on available pages

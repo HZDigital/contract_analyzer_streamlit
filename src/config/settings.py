@@ -32,7 +32,7 @@ class AppConfig:
     def get_available_pages(self) -> list:
         """Get list of available page identifiers based on environment."""
         if self.is_mehler_mode:
-            return ["dashboard", "mehler_cases"] 
+            return ["dashboard", "mehler_cases"]
         else:
             return [
                 "dashboard",
@@ -41,6 +41,7 @@ class AppConfig:
                 "invoice_normalstunden_extraction",
                 "detailed_analysis",
                 "mehler_cases",
+                "large_contract_scanner",
             ]
 
 

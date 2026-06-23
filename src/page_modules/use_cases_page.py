@@ -34,7 +34,7 @@ def render_use_cases_page():
         [
             "Use Case 1: Tender Document Analysis",
             "Use Case 2: Contract Review - Cooperation Agreements",
-            "Use Case 3: Factory Certificate Comparison"
+            "Use Case 3: Factory Certificate Comparison",
         ],
         key="use_case_selector",
         help="Select the type of analysis you want to perform"

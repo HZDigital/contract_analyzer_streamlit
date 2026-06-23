@@ -21,6 +21,7 @@ from page_modules.invoice_normalstunden_extraction import (
     render_invoice_normalstunden_extraction_page,
 )
 from page_modules.use_cases_page import render_use_cases_page
+from page_modules.large_contract_scanner import render_large_contract_scanner_page
 
 def validate_token_from_parent(token: str) -> bool:
     """Validate access token from parent React application."""
@@ -132,6 +133,11 @@ def main():
         render_detailed_analysis_page()
     elif st.session_state.current_page == "mehler_cases"  and "mehler_cases" in available_pages:
         render_use_cases_page()
+    elif (
+        st.session_state.current_page == "large_contract_scanner"
+        and "large_contract_scanner" in available_pages
+    ):
+        render_large_contract_scanner_page()
 
 
 if __name__ == "__main__":
