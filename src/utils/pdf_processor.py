@@ -186,6 +186,48 @@ def _should_ocr_page(page, page_text: str) -> bool:
     return bool(page.get_images(full=True)) and len(page_text.strip()) < 30
 
 
+def _load_deepseek_ocr_model():
+    """Load DeepSeek OCR with the fastest safe local configuration available."""
+    global _deepseek_model, _deepseek_tokenizer
+
+    if _deepseek_model is not None and _deepseek_tokenizer is not None:
+        return _deepseek_tokenizer, _deepseek_model
+
+    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+
+    model_name = "deepseek-ai/DeepSeek-OCR"
+    _deepseek_tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+
+    model_kwargs = {
+        "trust_remote_code": True,
+        "use_safetensors": True,
+    }
+
+    if torch.cuda.is_available():
+        model_kwargs["torch_dtype"] = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        try:
+            _deepseek_model = AutoModel.from_pretrained(
+                model_name,
+                _attn_implementation="flash_attention_2",
+                **model_kwargs,
+            ).cuda()
+        except Exception:  # noqa: BLE001
+            _deepseek_model = AutoModel.from_pretrained(
+                model_name,
+                device_map="auto",
+                **model_kwargs,
+            )
+    else:
+        _deepseek_model = AutoModel.from_pretrained(
+            model_name,
+            device_map="auto",
+            **model_kwargs,
+        )
+
+    _deepseek_model = _deepseek_model.eval()
+    return _deepseek_tokenizer, _deepseek_model
+
+
 def _extract_text_from_page_with_ocr(page, page_num: int) -> str:
     """Extract text from one rendered PDF page using OCR."""
     # Render at high DPI (300) for scanned documents.
@@ -194,24 +236,16 @@ def _extract_text_from_page_with_ocr(page, page_num: int) -> str:
     image = Image.open(BytesIO(pix.tobytes("png")))
 
     if _transformers_available:
+        temp_img_path = None
         try:
-            global _deepseek_model, _deepseek_tokenizer
-            if _deepseek_model is None:
-                _deepseek_tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-OCR", trust_remote_code=True)
-                _deepseek_model = AutoModel.from_pretrained(
-                    "deepseek-ai/DeepSeek-OCR",
-                    trust_remote_code=True,
-                    use_safetensors=True,
-                    device_map="auto"  # Auto-detect GPU/CPU
-                )
-                _deepseek_model = _deepseek_model.eval()
+            tokenizer, model = _load_deepseek_ocr_model()
 
             temp_img_path = os.path.join(tempfile.gettempdir(), f"temp_page_{page_num}.png")
             image.save(temp_img_path)
 
             prompt = "<image>\n<|grounding|>Convert the document to markdown. "
-            result = _deepseek_model.infer(
-                _deepseek_tokenizer,
+            result = model.infer(
+                tokenizer,
                 prompt=prompt,
                 image_file=temp_img_path,
                 base_size=1024,
@@ -219,12 +253,13 @@ def _extract_text_from_page_with_ocr(page, page_num: int) -> str:
                 crop_mode=True
             )
 
-            if os.path.exists(temp_img_path):
-                os.remove(temp_img_path)
             if result:
                 return str(result).strip()
         except Exception:  # noqa: BLE001
             pass  # Fall back to Tesseract
+        finally:
+            if temp_img_path and os.path.exists(temp_img_path):
+                os.remove(temp_img_path)
 
     try:
         return pytesseract.image_to_string(image).strip()
