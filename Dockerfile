@@ -1,30 +1,58 @@
-FROM python:3.9-slim
+FROM node:22-bookworm-slim AS frontend-builder
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    poppler-utils \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app/frontend
 
-# Set working directory
+ARG VITE_MSAL_CLIENT_ID
+ARG VITE_MSAL_AUTHORITY
+ARG VITE_MSAL_REDIRECT_URI
+ENV VITE_MSAL_CLIENT_ID=${VITE_MSAL_CLIENT_ID} \
+    VITE_MSAL_AUTHORITY=${VITE_MSAL_AUTHORITY} \
+    VITE_MSAL_REDIRECT_URI=${VITE_MSAL_REDIRECT_URI}
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+
+FROM python:3.13-slim-bookworm AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    HF_HOME=/opt/huggingface \
+    TRANSFORMERS_CACHE=/opt/huggingface \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+
 WORKDIR /app
 
-# Copy requirements and install dependencies
-COPY requirements.txt .
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+        poppler-utils \
+        tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY src/ /app/src/
+# Cache the primary OCR model during the image build. Runtime is explicitly offline.
+RUN mkdir -p "${HF_HOME}" \
+    && HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='deepseek-ai/DeepSeek-OCR', cache_dir='/opt/huggingface')"
 
-# Create results directory
-RUN mkdir -p /app/results
+RUN groupadd --system app \
+    && useradd --system --gid app --home-dir /app --create-home app \
+    && chown -R app:app /app "${HF_HOME}"
 
-# Set environment variables
-ENV PYTHONPATH=/app
+COPY --chown=app:app src/ ./src/
+COPY --chown=app:app --from=frontend-builder /app/frontend/dist/ ./frontend/dist/
 
-# Expose Streamlit port
-EXPOSE 8501
+USER app
 
-## No startup script needed, run Streamlit directly
-CMD ["streamlit", "run", "src/contract_analyzer_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--logger.level=debug"]
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.getenv('PORT', '8080'), timeout=3).read()"
+
+CMD ["sh", "-c", "exec uvicorn src.api.main:app --host 0.0.0.0 --port \"${PORT:-8080}\""]

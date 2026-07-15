@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional
 
-from config.settings import azure_config
+from src.api.settings import azure_config
 
 
 CONTRACT_SCANNER_SYSTEM_PROMPT = """
@@ -202,7 +202,7 @@ def analyze_contract_chunks(
     chunks: List[Dict[str, Any]],
     progress_callback: Optional[Callable[[int, int, Dict[str, Any]], None]] = None,
 ) -> List[Dict[str, Any]]:
-    """Analyze chunks sequentially so Streamlit can show deterministic progress."""
+    """Analyze chunks sequentially so callers receive deterministic progress."""
     results = []
     total = len(chunks)
     for index, chunk in enumerate(chunks, 1):

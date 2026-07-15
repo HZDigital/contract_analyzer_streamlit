@@ -1,0 +1,68 @@
+{
+  "rules": [
+    {
+      "enabled": true,
+      "name": "delete-temporary-analyzer-manifests",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": { "baseBlob": { "delete": { "daysAfterModificationGreaterThan": 60 } } },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["contract-analyzer/"],
+          "blobIndexMatch": [
+            { "name": "kind", "op": "==", "value": "manifest" },
+            { "name": "retention", "op": "==", "value": "temporary" }
+          ]
+        }
+      }
+    },
+    {
+      "enabled": true,
+      "name": "delete-temporary-analyzer-artifacts",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": { "baseBlob": { "delete": { "daysAfterModificationGreaterThan": 60 } } },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["contract-analyzer/"],
+          "blobIndexMatch": [
+            { "name": "kind", "op": "==", "value": "artifact" },
+            { "name": "retention", "op": "==", "value": "temporary" }
+          ]
+        }
+      }
+    },
+    {
+      "enabled": true,
+      "name": "delete-temporary-analyzer-context",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": { "baseBlob": { "delete": { "daysAfterModificationGreaterThan": 60 } } },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["contract-analyzer/"],
+          "blobIndexMatch": [
+            { "name": "kind", "op": "==", "value": "context" },
+            { "name": "retention", "op": "==", "value": "temporary" }
+          ]
+        }
+      }
+    },
+    {
+      "enabled": true,
+      "name": "delete-transient-analyzer-inputs",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": { "baseBlob": { "delete": { "daysAfterModificationGreaterThan": 1 } } },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["contract-analyzer/"],
+          "blobIndexMatch": [
+            { "name": "kind", "op": "==", "value": "input" },
+            { "name": "retention", "op": "==", "value": "transient" }
+          ]
+        }
+      }
+    }
+  ]
+}

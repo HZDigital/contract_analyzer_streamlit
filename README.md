@@ -1,131 +1,98 @@
 # Contract Analyzer
 
-A Streamlit-based application for analyzing contract documents using AI and OCR technologies.
+Contract Analyzer is a single-container web application for analyzing contracts and related documents. A React single-page application (SPA) is compiled with Vite during the image build and served by the FastAPI application at `src.api.main:app`. The same FastAPI runtime exposes the API, validates Entra ID access tokens, and stores jobs and artifacts in Azure Blob Storage.
 
-## Overview
+## Architecture
 
-This application helps legal professionals and business users analyze contract documents by:
+- **SPA:** React/Vite frontend, built in a Node 22 LTS stage and copied to `frontend/dist` in the runtime image.
+- **API:** FastAPI/Uvicorn serves the SPA and API from the same origin on `PORT` (default `8080`).
+- **Jobs:** Azure Blob Storage is the only job and artifact store. The service does not use a `results` directory or a mounted volume.
+- **OCR:** DeepSeek-OCR is the primary OCR engine. Its Hugging Face snapshot is downloaded while the image is built; `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE` prevent production runtime downloads. Tesseract remains the fallback when DeepSeek-OCR cannot process a page.
 
-- Extracting text from PDF documents (using both native extraction and OCR when needed)
-- Analyzing contracts with Azure OpenAI's language models
-- Identifying key clauses, risks, and important contract information
-- Generating clear summary reports
+The runtime image uses `python:3.13-slim-bookworm`, contains Tesseract and Poppler, and runs as an unprivileged `app` user. Its health endpoint is `GET /health`.
 
-## Features
+## Required Configuration
 
-- **Document Upload**: Support for single or multiple PDF contract uploads
-- **Text Extraction**:
-  - Primary method: Native PDF text extraction using PyMuPDF
-  - Fallback method: OCR using Tesseract and pdf2image for scanned documents
-- **Contract Analysis**:
-  - Contract summaries
-  - Extraction of key clauses (Termination, Confidentiality, Payment terms, etc.)
-  - Identification of unusual or risky contract language
-  - Contract date detection
-- **Results Storage**: Analysis results saved to text files for future reference
+Copy `.env.example` to `.env` and replace every placeholder before running the stack. Do not commit `.env`.
 
-## Installation
+| Setting | Purpose |
+| --- | --- |
+| `AZURE_STORAGE_CONTAINER_NAME` | Must be `contract-analyzer`, the private container used for analyzer jobs and artifacts. |
+| `AZURE_STORAGE_CONNECTION_STRING` | Required Blob Storage connection string. Store it as a Container App secret in Azure and keep it out of source control. |
+| `ENTRA_API_AUDIENCE` | Required exact audience of analyzer API v2 access tokens: the bare `<application-client-id>`. |
+| `ENTRA_ALLOWED_TENANT_IDS` | Optional comma-separated tenant allow-list. Omit it to accept signed analyzer tokens from every organizational Entra tenant. |
+| `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT` | Azure OpenAI endpoint, key, and deployed model name. |
+| `AZURE_OPENAI_API_VERSION` | Azure OpenAI API version; defaults to `2024-12-01-preview`. |
+| `SEARXNG_URL` | SearXNG base URL used by market-research workflows. |
+| `PORT` | FastAPI listener port. Defaults to `8080`. |
 
-### Standard Installation
+The backend reads `.env`. Browser `VITE_*` variables belong only in `frontend/.env`; they are embedded into static files at build time and are public application metadata, not secrets. Changing them requires rebuilding the image; setting them only on a running Container App does not change the SPA.
 
-1. Clone the repository:
+## Azure Storage Access And Retention
 
-   ```bash
-   git clone https://github.com/HZDigital/contract_analyzer_streamlit.git
-   cd contract_analyzer_streamlit
-   ```
+Configure `AZURE_STORAGE_CONNECTION_STRING` as a Container App secret and expose that secret to the application environment. It permits job creation, status updates, artifact uploads, and downloads in the private analyzer container. Do not place the connection string in repository variables, Docker build arguments, or frontend settings.
 
-2. Install required dependencies:
+The deployment workflow merges and reads back `infra/storage-lifecycle-policy.json` before each deployment, preserving lifecycle rules owned by other workloads on a shared storage account. Set the repository variable `AZURE_STORAGE_ACCOUNT_NAME` and grant the deployment identity permission to manage the storage account's lifecycle policy. The policy targets the required `contract-analyzer` container:
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+- Delete blobs tagged `kind=manifest`, `kind=artifact`, or `kind=context` with `retention=temporary` 60 days after last modification.
+- Do not add a deletion rule matching those result kinds with `retention=permanent`; permanent results are exempt from automatic deletion.
+- Delete blobs tagged `kind=input` after a short recovery window (for example one day). The service deletes inputs when a job reaches a terminal state; this is a safeguard for interrupted uploads.
 
-3. Install system dependencies:
+Source documents are always removed after the job reaches a terminal state. The retention choice applies to result manifests, downloads, and large-scan context only.
 
-   - Tesseract OCR
-   - Poppler utils
+## Entra ID Setup
 
-4. Set environment variables:
+The SPA and API use the same Entra app registration.
 
-   ```bash
-   export AZURE_OPENAI_API_KEY=your-api-key
-   export AZURE_OPENAI_ENDPOINT=your-azure-endpoint
-   ```
+1. Under **Supported account types**, select **Accounts in any organizational directory**.
+2. Register the deployed application URL, `http://localhost:8080`, and `http://localhost:5173` as **Single-page application** redirect URIs. Add any additional environment origins explicitly.
+3. Grant users or groups access as required by each tenant policy. Tenant administrators must consent when their policy requires it.
+4. Set `ENTRA_API_AUDIENCE=<application-client-id>` for API token validation. Entra v2 access tokens use the bare client ID in their `aud` claim, even though the SPA requests `<application-client-id>/.default`. The API accepts valid Entra v1 (`sts.windows.net`) and v2 (`login.microsoftonline.com`) issuer formats, each bound to the signed tenant ID. Do not set a tenant ID to restrict the API; by default it validates organizational tokens whose signed `tid` and issuer agree. Set `ENTRA_ALLOWED_TENANT_IDS` only when an explicit allow-list is required.
+5. Set the SPA build variables: `VITE_MSAL_CLIENT_ID=<application-client-id>` and `VITE_MSAL_AUTHORITY=https://login.microsoftonline.com/organizations`. The SPA requests `<application-client-id>/.default`, matching ProcurementSuite. `VITE_MSAL_REDIRECT_URI` is optional and otherwise uses the current origin.
 
-5. Run the application:
-   ```bash
-   streamlit run src/contract_analyzer_app.py
-   ```
+For GitHub deployment, configure the same `VITE_*` values as repository variables. The workflow passes them as Docker build arguments so they are included in the compiled SPA.
 
-### Docker Installation
+## Local Development
 
-1. Clone the repository:
-
-   ```bash
-   git clone <repository-url>
-   cd contract_analyzer_streamlit
-   ```
-
-2. Update environment variables in `docker-compose.yml`
-
-3. Build and run using Docker Compose:
-
-   ```bash
-   docker-compose up
-   ```
-
-4. Access the application at http://localhost:8501
-
-## Usage
-
-1. Open the application in a web browser
-2. Upload one or more PDF contracts using the file uploader
-3. For each document:
-   - The app extracts text (using OCR if necessary)
-   - Adjust the text length slider if needed
-   - The app analyzes the contract and displays results
-4. Review the analysis which includes:
-   - Contract summary
-   - Key clauses with direct quotes
-    - Identified risks or unusual language
-    - Contract dates
-
-## Invoice Batch Processing
-
-For large invoice batches, use the local batch script instead of the Streamlit upload page:
+### Full Container Stack
 
 ```bash
-python scripts/process_invoices_to_csv.py
+cp .env.example .env
+cp frontend/.env.example frontend/.env
+set -a
+. frontend/.env
+set +a
+docker-compose up --build
 ```
 
-The script reads PDFs from `input/`, writes `invoice_results_table.csv`, and can resume if interrupted. See `INVOICE_BATCH_PROCESSING.md` for setup and sharing instructions.
+Open `http://localhost:8080`; the health check is available at `http://localhost:8080/health`.
 
-## Configuration
+### API And SPA Separately
 
-### Environment Variables
+Install Python 3.13, Node 22 LTS, Tesseract, and Poppler. Run these commands from the repository root. The API reads `.env`; Vite reads `frontend/.env` and proxies `/api` to FastAPI during development.
 
-- `AZURE_OPENAI_API_KEY`: Your Azure OpenAI API key
-- `AZURE_OPENAI_ENDPOINT`: Your Azure OpenAI endpoint URL
-
-### Model Configuration
-
-The application uses the `gpt-4o-mini` deployment by default. This can be changed in the code if needed.
-
-## Project Structure
-
-```
-contract_analyzer_streamlit/
-├── src/
-│   └── contract_analyzer_app.py  # Main application code
-├── results/                      # Analysis results storage
-├── requirements.txt              # Python dependencies
-├── Dockerfile                    # Docker configuration
-├── docker-compose.yml            # Docker Compose configuration
-└── README.md                     # This file
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+# Required once for DeepSeek-primary OCR in local development.
+python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='deepseek-ai/DeepSeek-OCR')"
+uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
-## Notes
+```bash
+cd frontend
+cp .env.example .env
+npm ci
+npm run dev
+```
 
-- Results are stored in the `results` directory
-- When using Docker, the results directory is mounted as a volume for persistence
+Open `http://localhost:5173`. The Vite dev server forwards `/api/*` to `http://localhost:8080`, so the SPA uses the same API paths as production. If you instead run a compiled SPA through FastAPI, open `http://localhost:8080`.
+
+The DeepSeek snapshot is intentionally not downloaded at API startup. If it is absent locally, OCR falls back to Tesseract; use the one-time command above to match the production DeepSeek-primary behavior.
+
+Run backend tests with `pip install -r requirements-dev.txt` followed by `pytest`.
+
+## Deployment
+
+The GitHub Actions workflow builds the multi-stage image, deploys it to the `contractanalyzer` Azure Container App with external ingress targeting port `8080`, and then sets the app's minimum replica count to one. Configure the Container App with the required runtime settings and its managed identity before deployment. The workflow does not inject secrets into the image.

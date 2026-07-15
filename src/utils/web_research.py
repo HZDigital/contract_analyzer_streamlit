@@ -2,12 +2,11 @@
 Web research utilities using SearXNG for market intelligence.
 """
 
-import os
 import requests
 import json
 import time
 from typing import Dict, List, Any
-from config.settings import azure_config
+from src.api.settings import azure_config, get_settings
 
 
 def search_market_info(query: str, max_results: int = 5) -> List[Dict[str, str]]:
@@ -21,10 +20,12 @@ def search_market_info(query: str, max_results: int = 5) -> List[Dict[str, str]]
     Returns:
         List of search results with title, url, and content
     """
-    searxng_url = os.getenv("SEARXNG_URL", "https://searxng.orangeisland-6e1300af.germanywestcentral.azurecontainerapps.io")
-    
+    settings = get_settings()
+    searxng_url = settings.searxng_url
     if not searxng_url:
         return [{"error": "SearXNG URL not configured"}]
+
+    bounded_results = min(max(1, int(max_results)), settings.searxng_max_results)
     
     try:
         params = {
@@ -35,11 +36,15 @@ def search_market_info(query: str, max_results: int = 5) -> List[Dict[str, str]]
             "time_range": "year"  # Focus on recent information
         }
         
-        response = requests.get(f"{searxng_url}/search", params=params, timeout=30)
+        response = requests.get(
+            f"{searxng_url.rstrip('/')}/search",
+            params=params,
+            timeout=settings.searxng_timeout_seconds,
+        )
         response.raise_for_status()
         
         data = response.json()
-        results = data.get("results", [])[:max_results]
+        results = data.get("results", [])[:bounded_results]
         
         return [
             {
