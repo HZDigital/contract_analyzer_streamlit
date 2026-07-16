@@ -1,4 +1,4 @@
-import type { AnalyzerJob, JobArtifact } from "./types";
+import type { AnalyzerJob, JobArtifact, JobSource } from "./types";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -36,7 +36,7 @@ function asStringList(value: unknown): string[] {
       return [item];
     }
     if (isRecord(item)) {
-      const name = asString(item.name ?? item.fileName ?? item.filename ?? item.path);
+      const name = asString(item.name ?? item.fileName ?? item.filename);
       return name ? [name] : [];
     }
     return [];
@@ -71,6 +71,37 @@ function normalizeArtifacts(value: unknown): JobArtifact[] {
   });
 }
 
+function normalizeSource(value: unknown): JobSource | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const id = asString(value.id ?? value.sourceId ?? value._id);
+  const name = asString(value.name ?? value.fileName ?? value.filename);
+  if (!id || !name) {
+    return undefined;
+  }
+
+  return {
+    id,
+    name,
+    role: asString(value.role) ?? "source",
+    contentType: asString(value.contentType ?? value.mimeType ?? value.type),
+    size: asNumber(value.size ?? value.byteSize),
+    previewable: value.previewable === true,
+  };
+}
+
+function normalizeSources(value: unknown): JobSource[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((source) => {
+    const normalized = normalizeSource(source);
+    return normalized ? [normalized] : [];
+  });
+}
+
 export function normalizeJob(value: unknown): AnalyzerJob | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -84,6 +115,10 @@ export function normalizeJob(value: unknown): AnalyzerJob | undefined {
   const nestedProgress = isRecord(value.progress) ? value.progress : undefined;
   const nestedError = isRecord(value.error) ? value.error : undefined;
   const result = value.result ?? value.results ?? value.output ?? value.analysis;
+  const retentionValue = asString(value.retention)?.toLowerCase();
+  const retention = retentionValue === "temporary" || retentionValue === "permanent"
+    ? retentionValue
+    : undefined;
 
   return {
     id,
@@ -96,8 +131,13 @@ export function normalizeJob(value: unknown): AnalyzerJob | undefined {
     progress: asNumber(nestedProgress?.percent ?? nestedProgress?.value ?? value.progress),
     message: asString(value.message ?? value.statusMessage ?? nestedProgress?.message),
     error: asString(value.errorMessage ?? nestedError?.message ?? value.error),
+    retention,
+    retentionDays: asNumber(value.retentionDays ?? value.retention_days),
+    expiresAt: asString(value.expiresAt ?? value.expires_at),
+    coverage: asStringList(value.coverage),
     files: asStringList(value.files ?? value.documents ?? value.inputFiles),
     artifacts: normalizeArtifacts(value.artifacts ?? value.outputs ?? value.downloads),
+    sources: normalizeSources(value.sources ?? value.sourceDocuments),
     result,
     raw: value,
   };

@@ -78,7 +78,7 @@ async def list_jobs(
     service: Annotated[JobService, Depends(get_job_service)],
 ) -> list[dict[str, Any]]:
     jobs = await asyncio.to_thread(service.list_jobs, user)
-    return [job.public() for job in jobs]
+    return [job.summary_public() for job in jobs]
 
 
 @app.post("/api/jobs", status_code=status.HTTP_201_CREATED)
@@ -158,6 +158,27 @@ async def download_artifact(
         content=data,
         media_type=artifact.content_type,
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
+
+
+@app.get("/api/jobs/{job_id}/sources/{source_id}")
+async def get_source(
+    job_id: str,
+    source_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    service: Annotated[JobService, Depends(get_job_service)],
+) -> Response:
+    source, data = await asyncio.to_thread(service.get_source, user, job_id, source_id)
+    filename = quote(source.name, safe="")
+    disposition = "inline" if source.content_type == "application/pdf" else "attachment"
+    return Response(
+        content=data,
+        media_type=source.content_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f"{disposition}; filename*=UTF-8''{filename}",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

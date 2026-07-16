@@ -229,4 +229,23 @@ export class AnalyzerApi {
       filename: readContentDispositionFilename(response.headers.get("content-disposition")) ?? fallbackFilename,
     };
   }
+
+  async downloadSource(jobId: string, sourceId: string, fallbackFilename: string, signal?: AbortSignal): Promise<DownloadedArtifact> {
+    const response = await this.fetchWithToken(
+      `/jobs/${encodeURIComponent(jobId)}/sources/${encodeURIComponent(sourceId)}`,
+      { method: "GET", signal },
+    );
+    if (!response.ok) {
+      const body = await readResponseBody(response);
+      throw new AnalyzerApiError(
+        messageFromBody(body, `Source preview failed (${response.status}).`),
+        response.status,
+        body,
+      );
+    }
+    return {
+      blob: await response.blob(),
+      filename: readContentDispositionFilename(response.headers.get("content-disposition")) ?? fallbackFilename,
+    };
+  }
 }

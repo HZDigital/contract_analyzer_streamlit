@@ -10,6 +10,13 @@ export type WorkflowId =
   | "factory_certificate"
   | "large_scanner";
 
+export type AnalysisModuleId =
+  | "contract_review"
+  | "standard_comparison"
+  | "product_request"
+  | "invoice"
+  | "factory_certificate";
+
 export interface FileInputDefinition {
   id: string;
   label: string;
@@ -33,13 +40,20 @@ export interface OptionDefinition {
 
 export interface WorkflowDefinition {
   id: WorkflowId;
-  shortCode: string;
-  title: string;
-  description: string;
+  modeLabel: string;
   detail: string;
   inputs: FileInputDefinition[];
   options: OptionDefinition[];
   normalstundenSelection?: boolean;
+}
+
+export interface AnalysisModuleDefinition {
+  id: AnalysisModuleId;
+  shortCode: string;
+  title: string;
+  description: string;
+  defaultWorkflowId: WorkflowId;
+  workflowIds: WorkflowId[];
 }
 
 const pdfFiles = ".pdf,application/pdf";
@@ -47,111 +61,20 @@ const officeFiles = ".pdf,.doc,.docx,application/pdf,application/msword,applicat
 
 export const workflows: WorkflowDefinition[] = [
   {
-    id: "product_request",
-    shortCode: "PR",
-    title: "Product request",
-    description: "Extract customers, requested products, quantities, and common demand across documents.",
-    detail: "Upload the contract or request PDFs you want grouped into a consolidated order view.",
-    inputs: [
-      { id: "requests", label: "Request documents", hint: "PDF documents. You can add more than one.", accept: pdfFiles, multiple: true, minimum: 1 },
-    ],
-    options: [
-      { id: "groupSimilarProducts", label: "Group similar products across documents", type: "checkbox", defaultValue: true },
-    ],
-  },
-  {
-    id: "invoice",
-    shortCode: "IN",
-    title: "Invoice",
-    description: "Extract invoice details, suppliers, line items, values, and payment information.",
-    detail: "Upload one or more invoice PDFs for structured extraction.",
-    inputs: [
-      { id: "invoices", label: "Invoice PDFs", hint: "Upload one or more invoices.", accept: pdfFiles, multiple: true, minimum: 1 },
-    ],
-    options: [],
-  },
-  {
-    id: "normalstunden",
-    shortCode: "NH",
-    title: "Normalstunden",
-    description: "Extract regular hours and rates from invoices while excluding premiums and supplements.",
-    detail: "Choose either individual PDFs or a ZIP archive containing the invoice PDFs.",
-    inputs: [],
-    options: [
-      { id: "includeSubfolders", label: "Include ZIP subfolders", type: "checkbox", defaultValue: true },
-    ],
-    normalstundenSelection: true,
-  },
-  {
     id: "detailed_contract",
-    shortCode: "DC",
-    title: "Detailed contract",
-    description: "Review clauses, parties, dates, obligations, products, and risk language in contracts.",
-    detail: "Upload one or more PDF contracts for a detailed legal and commercial analysis.",
+    modeLabel: "Standard review",
+    detail: "Review one or more contracts for key commercial terms, clauses, obligations, and risks.",
     inputs: [
-      { id: "contracts", label: "Contract PDFs", hint: "One or more contracts can be analyzed together.", accept: pdfFiles, multiple: true, minimum: 1 },
-    ],
-    options: [
-      {
-        id: "truncateLength",
-        label: "Maximum characters per contract",
-        type: "range",
-        defaultValue: 3500,
-        help: "Use more text for lengthy contracts when a deeper review is required.",
-        min: 1000,
-        max: 30000,
-        step: 500,
-      },
-    ],
-  },
-  {
-    id: "tender",
-    shortCode: "TD",
-    title: "Tender",
-    description: "Extract and translate tender information into a completed internal tender list.",
-    detail: "Upload tender documents and the internal XLSX tender-list template that should be completed.",
-    inputs: [
-      { id: "tenderDocuments", label: "Tender documents", hint: "One or more tender PDFs.", accept: pdfFiles, multiple: true, minimum: 1 },
-      { id: "tenderTemplate", label: "Tender list template", hint: "The XLSX file to populate.", accept: ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", multiple: false, minimum: 1 },
-    ],
-    options: [
-      { id: "includeMarketResearch", label: "Include market situation research", type: "checkbox", defaultValue: true },
-    ],
-  },
-  {
-    id: "cooperation_review",
-    shortCode: "CR",
-    title: "Cooperation review",
-    description: "Compare supplier cooperation agreements against an internal standard contract.",
-    detail: "Add supplier proposals and the required standard contract used as the comparison baseline.",
-    inputs: [
-      { id: "supplierAgreements", label: "Supplier cooperation agreements", hint: "One or more PDF, DOC, or DOCX proposals.", accept: officeFiles, multiple: true, minimum: 1 },
-      { id: "standardContract", label: "Standard contract", hint: "The required PDF baseline contract.", accept: pdfFiles, multiple: false, minimum: 1 },
-    ],
-    options: [
-      { id: "includeRiskAssessment", label: "Include risk assessment", type: "checkbox", defaultValue: true },
-      { id: "includeRecommendations", label: "Include recommendations", type: "checkbox", defaultValue: true },
-    ],
-  },
-  {
-    id: "factory_certificate",
-    shortCode: "FC",
-    title: "Factory certificate",
-    description: "Compare technical specifications with certificates and identify tolerance deviations.",
-    detail: "Upload the specification and certificate PDFs together. At least two documents are required.",
-    inputs: [
-      { id: "comparisonDocuments", label: "Specifications and certificates", hint: "Upload all related PDFs in one set.", accept: pdfFiles, multiple: true, minimum: 2 },
+      { id: "contracts", label: "Contract PDFs", hint: "Each contract is reviewed separately.", accept: pdfFiles, multiple: true, minimum: 1 },
     ],
     options: [],
   },
   {
     id: "large_scanner",
-    shortCode: "LS",
-    title: "Large scanner",
-    description: "Analyze a long contract in cited chunks and ask follow-up questions against its evidence.",
-    detail: "Upload one complete long-form contract PDF. Questions become available after the scan finishes.",
+    modeLabel: "Deep review",
+    detail: "Analyze one long contract in cited chunks and ask follow-up questions against its stored evidence.",
     inputs: [
-      { id: "contract", label: "Large contract PDF", hint: "One PDF contract only.", accept: pdfFiles, multiple: false, minimum: 1 },
+      { id: "contract", label: "Large contract PDF", hint: "Upload one complete long-form contract.", accept: pdfFiles, multiple: false, minimum: 1 },
     ],
     options: [
       { id: "maxChars", label: "Chunk size (characters)", type: "number", defaultValue: 18000, min: 8000, max: 30000, step: 1000 },
@@ -159,12 +82,123 @@ export const workflows: WorkflowDefinition[] = [
       { id: "isCompleteDocument", label: "Uploaded PDF is the complete contract", type: "checkbox", defaultValue: true },
     ],
   },
+  {
+    id: "cooperation_review",
+    modeLabel: "Agreement comparison",
+    detail: "Compare supplier agreements with your standard contract to identify deviations, risks, and negotiation points.",
+    inputs: [
+      { id: "supplierAgreements", label: "Supplier cooperation agreements", hint: "One or more PDF, DOC, or DOCX proposals.", accept: officeFiles, multiple: true, minimum: 1 },
+      { id: "standardContract", label: "Standard contract", hint: "The required PDF comparison baseline.", accept: pdfFiles, multiple: false, minimum: 1 },
+    ],
+    options: [
+      { id: "includeRiskAssessment", label: "Include risk assessment", type: "checkbox", defaultValue: true },
+      { id: "includeRecommendations", label: "Include recommendations", type: "checkbox", defaultValue: true },
+    ],
+  },
+  {
+    id: "product_request",
+    modeLabel: "Demand extraction",
+    detail: "Upload request PDFs to consolidate customers, products, quantities, and common demand.",
+    inputs: [
+      { id: "requests", label: "Request documents", hint: "Add one or more PDF requests.", accept: pdfFiles, multiple: true, minimum: 1 },
+    ],
+    options: [
+      { id: "groupSimilarProducts", label: "Group similar products across documents", type: "checkbox", defaultValue: true },
+    ],
+  },
+  {
+    id: "invoice",
+    modeLabel: "Invoice extraction",
+    detail: "Extract suppliers, totals, taxes, payment terms, and line items from one or more invoices.",
+    inputs: [
+      { id: "invoices", label: "Invoice PDFs", hint: "Upload one or more invoices.", accept: pdfFiles, multiple: true, minimum: 1 },
+    ],
+    options: [],
+  },
+  {
+    id: "normalstunden",
+    modeLabel: "Regular hours and rates",
+    detail: "Extract regular working hours and rates from invoices while excluding premiums and supplements.",
+    inputs: [],
+    options: [
+      { id: "includeSubfolders", label: "Include ZIP subfolders", type: "checkbox", defaultValue: true },
+    ],
+    normalstundenSelection: true,
+  },
+  {
+    id: "factory_certificate",
+    modeLabel: "Certificate comparison",
+    detail: "Compare technical specifications with factory certificates and identify tolerance deviations.",
+    inputs: [
+      { id: "comparisonDocuments", label: "Specifications and certificates", hint: "Upload all related PDFs in one set; at least two are required.", accept: pdfFiles, multiple: true, minimum: 2 },
+    ],
+    options: [],
+  },
+];
+
+export const analysisModules: AnalysisModuleDefinition[] = [
+  {
+    id: "contract_review",
+    shortCode: "CR",
+    title: "Contract review",
+    description: "Review commercial terms and risks, with a deeper evidence-grounded mode for long contracts.",
+    defaultWorkflowId: "detailed_contract",
+    workflowIds: ["detailed_contract", "large_scanner"],
+  },
+  {
+    id: "standard_comparison",
+    shortCode: "CS",
+    title: "Compare with standard",
+    description: "Compare supplier agreements against your standard contract and prepare negotiation points.",
+    defaultWorkflowId: "cooperation_review",
+    workflowIds: ["cooperation_review"],
+  },
+  {
+    id: "product_request",
+    shortCode: "PR",
+    title: "Product request",
+    description: "Consolidate products, quantities, customers, and shared demand across request documents.",
+    defaultWorkflowId: "product_request",
+    workflowIds: ["product_request"],
+  },
+  {
+    id: "invoice",
+    shortCode: "IN",
+    title: "Invoice",
+    description: "Extract complete invoice data or focus specifically on regular hours and hourly rates.",
+    defaultWorkflowId: "invoice",
+    workflowIds: ["invoice", "normalstunden"],
+  },
+  {
+    id: "factory_certificate",
+    shortCode: "FC",
+    title: "Factory certificate",
+    description: "Compare manufacturing specifications with certificates and highlight tolerance deviations.",
+    defaultWorkflowId: "factory_certificate",
+    workflowIds: ["factory_certificate"],
+  },
 ];
 
 export function workflowById(id: string): WorkflowDefinition | undefined {
   return workflows.find((workflow) => workflow.id === id);
 }
 
+export function moduleById(id: string): AnalysisModuleDefinition | undefined {
+  return analysisModules.find((module) => module.id === id);
+}
+
+export function moduleForWorkflow(id: string): AnalysisModuleDefinition | undefined {
+  return analysisModules.find((module) => module.workflowIds.some((workflowId) => workflowId === id));
+}
+
 export function workflowTitle(id: string): string {
-  return workflowById(id)?.title ?? id.replaceAll("_", " ");
+  const module = moduleForWorkflow(id);
+  const workflow = workflowById(id);
+  if (!module || !workflow) {
+    if (id === "tender") {
+      return "Tender";
+    }
+    return id.replaceAll("_", " ");
+  }
+  return module.workflowIds.length > 1 ? `${module.title} - ${workflow.modeLabel}` : module.title;
 }

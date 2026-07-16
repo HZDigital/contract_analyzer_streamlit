@@ -1,3 +1,5 @@
+import type { WorkflowId } from "./workflows";
+
 export type Retention = "temporary" | "permanent";
 
 export type OptionValue = string | number | boolean;
@@ -7,6 +9,24 @@ export interface JobArtifact {
   name: string;
   contentType?: string;
   size?: number;
+}
+
+export interface JobSource {
+  id: string;
+  name: string;
+  role: string;
+  contentType?: string;
+  size?: number;
+  previewable: boolean;
+}
+
+export interface ResultReference {
+  sourceId: string;
+  sourceName: string;
+  quote?: string;
+  page?: number;
+  pageEnd?: number;
+  section?: string;
 }
 
 export interface AnalyzerJob {
@@ -20,8 +40,13 @@ export interface AnalyzerJob {
   progress?: number;
   message?: string;
   error?: string;
+  retention?: Retention;
+  retentionDays?: number;
+  expiresAt?: string;
+  coverage: string[];
   files: string[];
   artifacts: JobArtifact[];
+  sources: JobSource[];
   result?: unknown;
   raw: Record<string, unknown>;
 }
@@ -32,7 +57,7 @@ export interface SubmittedFile {
 }
 
 export interface SubmitJobInput {
-  workflow: string;
+  workflow: WorkflowId;
   retention: Retention;
   options: Record<string, OptionValue>;
   files: SubmittedFile[];

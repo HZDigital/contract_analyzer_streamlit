@@ -269,24 +269,6 @@ def _extract_text_from_page_with_ocr(page, page_num: int) -> str:
     except Exception:  # noqa: BLE001
         return ""
 
-def get_text_length_info(text: str) -> dict:
-    """
-    Get information about text length for processing decisions.
-    
-    Args:
-        text: Input text
-        
-    Returns:
-        dict: Text length information
-    """
-    length = len(text)
-    return {
-        "length": length,
-        "is_short": length < 3000,
-        "recommended_truncate": min(3500, length) if length >= 3000 else length
-    }
-
-
 def extract_text_from_docx(file: Union[BinaryIO, bytes]) -> str:
     """
     Extract text from a Word document (.docx).

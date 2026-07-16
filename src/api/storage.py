@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import threading
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Iterable
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobLeaseClient, BlobServiceClient, ContentSettings
 
-from .schemas import InputReference, JobArtifact, JobRecord, utc_now
+from .schemas import InputReference, JobArtifact, JobRecord, JobSource, utc_now
 from .settings import Settings
 from .uploads import ValidatedUpload
 
@@ -25,6 +26,15 @@ class StorageNotConfiguredError(RuntimeError):
 
 class JobNotFoundError(LookupError):
     """Raised when an owner does not have the requested job."""
+
+
+_SOURCE_CONTENT_TYPES = {
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".zip": "application/zip",
+}
 
 
 @dataclass
@@ -251,16 +261,17 @@ class BlobJobStorage:
         name: str,
         content_type: str,
         data: bytes,
+        artifact_id: str | None = None,
     ) -> JobArtifact:
-        artifact_id = str(uuid4())
+        artifact_id = artifact_id or str(uuid4())
         suffix = PurePosixPath(name).suffix.lower()
         blob_name = f"{self._job_prefix(job.owner_oid, job.id)}/artifacts/{artifact_id}{suffix}"
         self._write_bytes(
             blob_name,
             data,
             content_type,
-            overwrite=False,
-            tags={"kind": "artifact", "retention": job.retention},
+            overwrite=True,
+            tags={"kind": "artifact", "retention": "transient"},
         )
         return JobArtifact(
             id=artifact_id,
@@ -270,12 +281,178 @@ class BlobJobStorage:
             blob_name=blob_name,
         )
 
+    @staticmethod
+    def artifact_id(job: JobRecord, index: int, name: str) -> str:
+        """Return a stable artifact ID so finalization can be replayed safely."""
+
+        return str(uuid5(UUID(job.id), f"{index}:{PurePosixPath(name).name}"))
+
+    def save_outcome(self, job: JobRecord, result: dict, artifacts: Iterable[object]) -> None:
+        """Checkpoint a complete in-memory workflow outcome for crash recovery."""
+
+        payload = {
+            "result": result,
+            "artifacts": [
+                {
+                    "name": str(getattr(artifact, "name")),
+                    "contentType": str(getattr(artifact, "content_type")),
+                    "data": base64.b64encode(bytes(getattr(artifact, "data"))).decode("ascii"),
+                }
+                for artifact in artifacts
+            ],
+        }
+        self._write_bytes(
+            f"{self._job_prefix(job.owner_oid, job.id)}/outcome.json",
+            json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            "application/json",
+            tags={"kind": "outcome", "retention": "transient"},
+        )
+
+    def load_outcome(self, job: JobRecord):
+        """Load a private workflow checkpoint without re-running analysis."""
+
+        from .workflows import WorkflowArtifact, WorkflowResult
+
+        try:
+            payload = json.loads(
+                self._read_bytes(f"{self._job_prefix(job.owner_oid, job.id)}/outcome.json")
+            )
+            result = payload["result"]
+            artifacts = [
+                WorkflowArtifact(
+                    data=base64.b64decode(item["data"], validate=True),
+                    name=item["name"],
+                    content_type=item["contentType"],
+                )
+                for item in payload["artifacts"]
+            ]
+            if not isinstance(result, dict):
+                raise ValueError("Workflow result must be an object.")
+            return WorkflowResult(result=result, artifacts=artifacts)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise JobNotFoundError("Workflow outcome unavailable.") from exc
+
+    def delete_outcome(self, job: JobRecord) -> None:
+        try:
+            self._blob_client(f"{self._job_prefix(job.owner_oid, job.id)}/outcome.json").delete_blob()
+        except ResourceNotFoundError:
+            pass
+
+    def save_source(
+        self,
+        job: JobRecord,
+        *,
+        name: str,
+        role: str,
+        data: bytes,
+    ) -> JobSource:
+        source_id = str(uuid4())
+        safe_name = PurePosixPath(name).name
+        suffix = PurePosixPath(safe_name).suffix.lower()
+        content_type = _SOURCE_CONTENT_TYPES.get(suffix, "application/octet-stream")
+        blob_name = f"{self._job_prefix(job.owner_oid, job.id)}/sources/{source_id}{suffix}"
+        self._write_bytes(
+            blob_name,
+            data,
+            content_type,
+            overwrite=False,
+            # Sources remain short-lived until a running manifest checkpoints
+            # their IDs. This prevents a terminated worker from orphaning a
+            # permanent source that no manifest can authorize or delete.
+            tags={"kind": "source", "retention": "transient"},
+        )
+        return JobSource(
+            id=source_id,
+            name=safe_name,
+            role=role,
+            content_type=content_type,
+            size=len(data),
+            blob_name=blob_name,
+        )
+
+    def promote_sources(self, job: JobRecord, sources: Iterable[JobSource]) -> None:
+        """Move checkpointed sources onto the job's selected retention."""
+
+        self.ensure_container()
+        for source in sources:
+            client = self._blob_client(source.blob_name)
+            try:
+                # Updating metadata resets lifecycle age to finalization time;
+                # Set Blob Tags alone does not change Last-Modified.
+                client.set_blob_metadata({})
+                client.set_blob_tags({"kind": "source", "retention": job.retention})
+            except ResourceNotFoundError as exc:
+                raise JobNotFoundError("Staged source unavailable.") from exc
+
+    def promote_artifacts(self, job: JobRecord, artifacts: Iterable[JobArtifact]) -> None:
+        """Move checkpointed exports onto the job's selected retention."""
+
+        self.ensure_container()
+        for artifact in artifacts:
+            try:
+                client = self._blob_client(artifact.blob_name)
+                client.set_blob_metadata({})
+                client.set_blob_tags({"kind": "artifact", "retention": job.retention})
+            except ResourceNotFoundError as exc:
+                raise JobNotFoundError("Staged artifact unavailable.") from exc
+
+    def promote_context(self, job: JobRecord) -> None:
+        """Move checkpointed analysis context onto the job's selected retention."""
+
+        self.ensure_container()
+        try:
+            client = self._blob_client(f"{self._job_prefix(job.owner_oid, job.id)}/context.json")
+            client.set_blob_metadata({})
+            client.set_blob_tags({"kind": "context", "retention": job.retention})
+        except ResourceNotFoundError as exc:
+            raise JobNotFoundError("Staged analysis context unavailable.") from exc
+
+    def delete_sources(self, sources: Iterable[JobSource]) -> None:
+        first_error: Exception | None = None
+        for source in sources:
+            try:
+                # If deletion is temporarily unavailable, the lifecycle rule
+                # must still be able to collect an unpublished source.
+                self._blob_client(source.blob_name).set_blob_tags(
+                    {"kind": "source", "retention": "transient"}
+                )
+                self._blob_client(source.blob_name).delete_blob()
+            except ResourceNotFoundError:
+                continue
+            except Exception as exc:  # noqa: BLE001
+                first_error = first_error or exc
+        if first_error is not None:
+            raise first_error
+
+    def delete_artifacts(self, artifacts: Iterable[JobArtifact]) -> None:
+        first_error: Exception | None = None
+        for artifact in artifacts:
+            try:
+                self._blob_client(artifact.blob_name).set_blob_tags(
+                    {"kind": "artifact", "retention": "transient"}
+                )
+                self._blob_client(artifact.blob_name).delete_blob()
+            except ResourceNotFoundError:
+                continue
+            except Exception as exc:  # noqa: BLE001
+                first_error = first_error or exc
+        if first_error is not None:
+            raise first_error
+
+    def delete_context(self, job: JobRecord) -> None:
+        client = self._blob_client(f"{self._job_prefix(job.owner_oid, job.id)}/context.json")
+        try:
+            client.set_blob_tags({"kind": "context", "retention": "transient"})
+            client.delete_blob()
+        except ResourceNotFoundError:
+            pass
+
     def save_context(self, job: JobRecord, data: bytes) -> None:
         self._write_bytes(
             f"{self._job_prefix(job.owner_oid, job.id)}/context.json",
             data,
             "application/json",
-            tags={"kind": "context", "retention": job.retention},
+            tags={"kind": "context", "retention": "transient"},
         )
 
     def load_context(self, job: JobRecord) -> dict:
@@ -292,6 +469,12 @@ class BlobJobStorage:
         if artifact is None:
             raise JobNotFoundError("Artifact not found.")
         return artifact, self._read_bytes(artifact.blob_name)
+
+    def load_source(self, job: JobRecord, source_id: str) -> tuple[JobSource, bytes]:
+        source = next((item for item in job.sources if item.id == source_id), None)
+        if source is None:
+            raise JobNotFoundError("Source not found.")
+        return source, self._read_bytes(source.blob_name)
 
     def delete_prefix(self, owner_oid: str, job_id: str, *, ignore_missing: bool = False) -> None:
         self.ensure_container()

@@ -19,6 +19,42 @@ def test_manifest_uses_the_same_retention_tag_as_its_result_data() -> None:
     assert captured["tags"] == {"kind": "manifest", "retention": "temporary"}
 
 
+def test_source_uses_an_opaque_path_and_starts_transient() -> None:
+    storage = BlobJobStorage(Settings.model_validate({"AZURE_STORAGE_CONNECTION_STRING": "UseDevelopmentStorage=true"}))
+    captured: dict[str, Any] = {}
+
+    def capture_write(name: str, *_args: Any, **kwargs: Any) -> None:
+        captured["name"] = name
+        captured.update(kwargs)
+
+    storage._write_bytes = capture_write  # type: ignore[method-assign]
+    job = JobRecord(owner_oid="object-id", workflow="invoice", retention="temporary")
+
+    source = storage.save_source(job, name="invoice.pdf", role="invoices", data=b"pdf")
+
+    assert source.name == "invoice.pdf"
+    assert source.content_type == "application/pdf"
+    assert captured["name"].endswith(f"/sources/{source.id}.pdf")
+    assert captured["tags"] == {"kind": "source", "retention": "transient"}
+
+
+def test_artifact_starts_transient_until_the_private_checkpoint_is_published() -> None:
+    storage = BlobJobStorage(Settings.model_validate({"AZURE_STORAGE_CONNECTION_STRING": "UseDevelopmentStorage=true"}))
+    captured: dict[str, Any] = {}
+
+    def capture_write(name: str, *_args: Any, **kwargs: Any) -> None:
+        captured["name"] = name
+        captured.update(kwargs)
+
+    storage._write_bytes = capture_write  # type: ignore[method-assign]
+    job = JobRecord(owner_oid="object-id", workflow="invoice", retention="permanent")
+
+    artifact = storage.save_artifact(job, name="invoice.csv", content_type="text/csv", data=b"result")
+
+    assert captured["name"].endswith(f"/artifacts/{artifact.id}.csv")
+    assert captured["tags"] == {"kind": "artifact", "retention": "transient"}
+
+
 def test_acquired_manifest_lease_uses_the_sdk_lease_id(monkeypatch) -> None:
     class FakeLease:
         def __init__(self, _blob: object) -> None:

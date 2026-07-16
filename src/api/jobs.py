@@ -14,14 +14,19 @@ from fastapi import HTTPException, status
 
 from src.utils.large_contract_analyzer import answer_contract_question
 
-from .schemas import CurrentUser, FileRole, JobRecord, utc_now
+from .public_results import curate_public_result
+from .schemas import CurrentUser, FileRole, JobRecord, JobSource, utc_now
 from .settings import Settings
 from .storage import BlobJobStorage, JobLease, JobNotFoundError, StorageNotConfiguredError
 from .uploads import ValidatedUpload
-from .workflows import WorkflowInput, run_workflow
+from .workflows import STANDARD_CONTRACT_CHARACTER_LIMIT, WorkflowInput, run_workflow
 
 
 logger = logging.getLogger(__name__)
+
+
+class _ProgressUpdateError(RuntimeError):
+    """A progress write failed; the workflow itself has not failed."""
 
 
 class JobService:
@@ -52,6 +57,13 @@ class JobService:
             retention_days = 60
         else:
             retention_days = None
+        if workflow == "detailed_contract":
+            options = {
+                key: value
+                for key, value in options.items()
+                if key not in {"truncateLength", "truncate_length", "analysisDepth", "analysis_depth"}
+            }
+            options["truncateLength"] = STANDARD_CONTRACT_CHARACTER_LIMIT
         job = JobRecord(
             owner_oid=user.oid,
             workflow=workflow,
@@ -93,10 +105,21 @@ class JobService:
 
     def get_artifact(self, user: CurrentUser, job_id: str, artifact_id: str):
         job = self.get_job(user, job_id)
+        if job.status != "completed":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found.")
         try:
             return self.storage.load_artifact(job, artifact_id)
         except JobNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found.") from exc
+
+    def get_source(self, user: CurrentUser, job_id: str, source_id: str):
+        job = self.get_job(user, job_id)
+        if job.status != "completed":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found.")
+        try:
+            return self.storage.load_source(job, source_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found.") from exc
 
     def answer_question(self, user: CurrentUser, job_id: str, question: str) -> str:
         job = self.get_job(user, job_id)
@@ -204,6 +227,8 @@ class JobDispatcher:
         if lease is None:
             return
         heartbeat = _LeaseHeartbeat(self.storage, lease, self.settings.job_lease_seconds)
+        retained_sources: list[JobSource] = []
+        workflow_failed = False
         try:
             job = self.storage.get_job(owner_oid, job_id)
             now = utc_now()
@@ -224,30 +249,100 @@ class JobDispatcher:
             def update_progress(progress: int, message: str) -> None:
                 job.progress = max(job.progress, min(99, int(progress)))
                 job.message = message[:240]
-                self.storage.save_job(job, lease_id=lease.lease_id)
+                try:
+                    self.storage.save_job(job, lease_id=lease.lease_id)
+                except Exception as exc:  # noqa: BLE001
+                    raise _ProgressUpdateError("Unable to persist workflow progress.") from exc
 
-            input_files = [
-                WorkflowInput(reference.name, reference.role, data, reference.content_type, reference.supplier_hint)
-                for reference, data in self.storage.load_inputs(job)
-            ]
-            outcome = run_workflow(job, input_files, update_progress)
-            result = dict(outcome.result)
-            context = result.pop("qa_context", None)
-            if isinstance(context, dict):
-                self.storage.save_context(
-                    job,
-                    json.dumps(context, ensure_ascii=False).encode("utf-8"),
-                )
-            job.artifacts = [
-                self.storage.save_artifact(
-                    job,
-                    name=artifact.name,
-                    content_type=artifact.content_type,
-                    data=artifact.data,
-                )
-                for artifact in outcome.artifacts
-            ]
-            job.result = result
+            if job.finalization_ready:
+                retained_sources = list(job.sources)
+                logger.info("Recovering analyzer job from finalization checkpoint: %s", job.id)
+            else:
+                try:
+                    outcome = self.storage.load_outcome(job)
+                    logger.info("Recovering analyzer job from workflow checkpoint: %s", job.id)
+                except JobNotFoundError:
+                    loaded_inputs = self.storage.load_inputs(job)
+                    if job.sources:
+                        retained_sources = list(job.sources)
+                    else:
+                        for reference, data in loaded_inputs:
+                            retained_sources.append(
+                                self.storage.save_source(
+                                    job,
+                                    name=reference.name,
+                                    role=reference.role,
+                                    data=data,
+                                )
+                            )
+                        job.sources = list(retained_sources)
+                        # Persist opaque source IDs before analysis. A stale
+                        # worker reuses these copies instead of duplicating them.
+                        self.storage.save_job(job, lease_id=lease.lease_id)
+                    input_files = [
+                        WorkflowInput(reference.name, reference.role, data, reference.content_type, reference.supplier_hint)
+                        for reference, data in loaded_inputs
+                    ]
+                    try:
+                        outcome = run_workflow(job, input_files, update_progress)
+                    except _ProgressUpdateError:
+                        raise
+                    except Exception:
+                        workflow_failed = True
+                        raise
+                    # Once this first post-analysis write commits, result and
+                    # export publication can replay without another model call.
+                    self.storage.save_outcome(job, outcome.result, outcome.artifacts)
+                else:
+                    retained_sources = list(job.sources)
+                    if not retained_sources:
+                        # This can only occur for an interrupted rollout or a
+                        # malformed private checkpoint. Rebuild source staging
+                        # while the original inputs are still recoverable.
+                        for reference, data in self.storage.load_inputs(job):
+                            retained_sources.append(
+                                self.storage.save_source(
+                                    job,
+                                    name=reference.name,
+                                    role=reference.role,
+                                    data=data,
+                                )
+                            )
+                        job.sources = list(retained_sources)
+                        self.storage.save_job(job, lease_id=lease.lease_id)
+                result = dict(outcome.result)
+                context = result.pop("qa_context", None)
+                if isinstance(context, dict):
+                    self.storage.save_context(
+                        job,
+                        json.dumps(context, ensure_ascii=False).encode("utf-8"),
+                    )
+                    job.context_staged = True
+                job.artifacts = [
+                    self.storage.save_artifact(
+                        job,
+                        name=artifact.name,
+                        content_type=artifact.content_type,
+                        data=artifact.data,
+                        artifact_id=self.storage.artifact_id(job, index, artifact.name),
+                    )
+                    for index, artifact in enumerate(outcome.artifacts)
+                ]
+                job.result = curate_public_result(job.workflow, result)
+                display_fields = result.get("_display_fields")
+                if isinstance(display_fields, list):
+                    # Keep the template-derived allow-list private so repeated
+                    # projection can retain custom tender fields safely.
+                    job.result["_display_fields"] = display_fields
+                job.finalization_ready = True
+                job.message = "Finalizing analysis"
+                # This private running manifest references every staged source
+                # and output. It remains sufficient after the outcome expires.
+                self.storage.save_job(job, lease_id=lease.lease_id)
+            self.storage.promote_sources(job, retained_sources)
+            self.storage.promote_artifacts(job, job.artifacts)
+            if job.context_staged:
+                self.storage.promote_context(job)
             job.status = "completed"
             job.progress = 100
             job.message = "Analysis complete"
@@ -256,17 +351,90 @@ class JobDispatcher:
             # Publish the terminal state before deleting inputs. If the manifest
             # write loses its lease, recovery still has the original documents.
             self._delete_inputs_best_effort(job)
+            self._delete_outcome_best_effort(job)
             logger.info("Analyzer job completed: %s", job.id)
-        except Exception:  # noqa: BLE001
+        except Exception as worker_error:  # noqa: BLE001
             logger.exception("Analyzer job failed: %s", job_id)
             try:
                 job = self.storage.get_job(owner_oid, job_id)
+                # A terminal manifest write can be committed by Blob Storage
+                # even if the client loses the response. Treat the durable
+                # completed state as authoritative instead of deleting sources
+                # and rewriting it as a failure.
+                if job.status == "completed":
+                    self._delete_inputs_best_effort(job)
+                    self._delete_outcome_best_effort(job)
+                    logger.info("Analyzer job completion confirmed after write error: %s", job_id)
+                    return
+                checkpoint_missing = isinstance(worker_error, JobNotFoundError)
+                if job.finalization_ready and not checkpoint_missing:
+                    logger.warning("Analyzer job manifest finalization deferred: %s", job_id)
+                    return
+                if not checkpoint_missing:
+                    try:
+                        self.storage.load_outcome(job)
+                    except JobNotFoundError:
+                        pass
+                    else:
+                        # Keep the private, replayable outcome. A later leased
+                        # worker retries idempotent finalization without
+                        # repeating OCR or LLM calls.
+                        logger.warning("Analyzer job source finalization deferred: %s", job_id)
+                        return
+                if not workflow_failed and not checkpoint_missing:
+                    # Storage and lease errors are retryable. In particular,
+                    # never delete data unless this worker first fences recovery
+                    # by publishing a terminal manifest under its active lease.
+                    logger.warning("Analyzer job retry deferred after storage error: %s", job_id)
+                    return
+                sources_to_delete = list({source.id: source for source in [*job.sources, *retained_sources]}.values())
+                artifacts_to_delete = list(job.artifacts)
+                context_to_delete = job.context_staged
                 job.status = "failed"
                 job.error = "Analysis failed. Check the inputs and try again."
                 job.message = "Analysis failed"
                 job.completed_at = utc_now()
-                self.storage.save_job(job, lease_id=lease.lease_id)
+                try:
+                    # Publish the failed state before deleting anything. Its
+                    # private references anchor cleanup but remain hidden from
+                    # public payloads and download endpoints.
+                    self.storage.save_job(job, lease_id=lease.lease_id)
+                except Exception:
+                    durable_job = self.storage.get_job(owner_oid, job_id)
+                    if durable_job.status != "failed":
+                        raise
+                    job = durable_job
+                    sources_to_delete = list(job.sources)
+                    artifacts_to_delete = list(job.artifacts)
+                    context_to_delete = job.context_staged
+                if sources_to_delete:
+                    try:
+                        self.storage.delete_sources(sources_to_delete)
+                    except Exception:  # noqa: BLE001
+                        logger.warning("Unable to remove unpublished analyzer sources: %s", job_id)
+                if artifacts_to_delete:
+                    try:
+                        self.storage.delete_artifacts(artifacts_to_delete)
+                    except Exception:  # noqa: BLE001
+                        logger.warning("Unable to remove unpublished analyzer artifacts: %s", job_id)
+                if context_to_delete:
+                    try:
+                        self.storage.delete_context(job)
+                    except Exception:  # noqa: BLE001
+                        logger.warning("Unable to remove unpublished analyzer context: %s", job_id)
                 self._delete_inputs_best_effort(job)
+                self._delete_outcome_best_effort(job)
+                job.sources = []
+                job.artifacts = []
+                job.result = None
+                job.context_staged = False
+                job.finalization_ready = False
+                try:
+                    self.storage.save_job(job, lease_id=lease.lease_id)
+                except Exception:  # noqa: BLE001
+                    # The durable failed manifest still holds private cleanup
+                    # references and manual prefix deletion remains possible.
+                    logger.warning("Unable to clear failed analyzer checkpoints: %s", job_id)
             except Exception:  # noqa: BLE001
                 logger.exception("Unable to persist analyzer job failure: %s", job_id)
         finally:
@@ -280,3 +448,9 @@ class JobDispatcher:
             self.storage.delete_inputs(job)
         except Exception:  # noqa: BLE001
             logger.warning("Unable to remove analyzer job inputs: %s", job.id)
+
+    def _delete_outcome_best_effort(self, job: JobRecord) -> None:
+        try:
+            self.storage.delete_outcome(job)
+        except Exception:  # noqa: BLE001
+            logger.warning("Unable to remove analyzer workflow checkpoint: %s", job.id)

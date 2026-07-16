@@ -12,8 +12,10 @@
   "dependencies": {
     "@azure/msal-browser": "^4.19.0",
     "@azure/msal-react": "^3.0.20",
+    "pdfjs-dist": "5.4.296",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "react-pdf": "10.4.1"
   },
   "devDependencies": {
     "@types/react": "^19.1.12",

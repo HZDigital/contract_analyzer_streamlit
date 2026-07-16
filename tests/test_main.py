@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from src.api.auth import get_current_user
 from src.api.main import app
-from src.api.schemas import CurrentUser, JobRecord
+from src.api.schemas import CurrentUser, JobRecord, JobSource
 
 
 class FakeJobService:
@@ -27,6 +27,40 @@ class FakeJobService:
             retention_days=retention_days,
             files=[upload.name for upload in uploads],
         )
+
+    def get_source(self, _user, _job_id, source_id):
+        return (
+            JobSource(
+                id=source_id,
+                name="agreement.pdf",
+                role="contracts",
+                content_type="application/pdf",
+                size=3,
+                blob_name="private/source.pdf",
+            ),
+            b"pdf",
+        )
+
+    def list_jobs(self, user) -> list[JobRecord]:
+        return [
+            JobRecord(
+                owner_oid=user.oid,
+                workflow="invoice",
+                status="completed",
+                files=["invoice.pdf"],
+                result={"workflow": "invoice", "results": [{"invoice_number": "INV-42"}]},
+                sources=[
+                    JobSource(
+                        id="source-id",
+                        name="invoice.pdf",
+                        role="invoices",
+                        content_type="application/pdf",
+                        size=3,
+                        blob_name="private/source.pdf",
+                    )
+                ],
+            )
+        ]
 
 
 def _auth_user() -> CurrentUser:
@@ -81,6 +115,41 @@ def test_create_job_rejects_disagreeing_retention_field_aliases() -> None:
 
     assert response.status_code == 422
     assert response.json() == {"error": "Retention day values must match."}
+
+
+def test_job_list_returns_summaries_without_completed_result_content() -> None:
+    service = FakeJobService()
+    app.dependency_overrides[get_current_user] = _auth_user
+    try:
+        with TestClient(app) as client:
+            app.state.job_service = service
+            response = client.get("/api/jobs")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["files"] == ["invoice.pdf"]
+    assert "result" not in response.json()[0]
+    assert "sources" not in response.json()[0]
+    assert "artifacts" not in response.json()[0]
+
+
+def test_source_preview_is_private_inline_content() -> None:
+    service = FakeJobService()
+    app.dependency_overrides[get_current_user] = _auth_user
+    try:
+        with TestClient(app) as client:
+            app.state.job_service = service
+            response = client.get("/api/jobs/job-id/sources/source-id")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.content == b"pdf"
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("inline;")
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
 
 
 def test_unknown_api_route_never_falls_back_to_the_spa() -> None:

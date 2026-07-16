@@ -35,6 +35,32 @@ def test_validate_uploads_rejects_a_role_not_allowed_by_the_workflow() -> None:
         asyncio.run(validate())
 
 
+def test_validate_uploads_rejects_case_insensitive_duplicate_names() -> None:
+    async def validate() -> None:
+        await validate_uploads(
+            "invoice",
+            [_upload("invoice.pdf", b"one"), _upload("Invoice.pdf", b"two")],
+            '[{"role":"invoices","name":"invoice.pdf"},{"role":"invoices","name":"Invoice.pdf"}]',
+            Settings(),
+        )
+
+    with pytest.raises(HTTPException, match="Duplicate uploaded filenames"):
+        asyncio.run(validate())
+
+
+def test_validate_uploads_rejects_duplicate_actual_upload_names() -> None:
+    async def validate() -> None:
+        await validate_uploads(
+            "invoice",
+            [_upload("invoice.pdf", b"one"), _upload("invoice.pdf", b"two")],
+            '[{"role":"invoices","name":"invoice.pdf"},{"role":"invoices","name":"other.pdf"}]',
+            Settings(),
+        )
+
+    with pytest.raises(HTTPException, match="Duplicate uploaded filenames"):
+        asyncio.run(validate())
+
+
 def test_normalstunden_zip_rejects_path_traversal_and_non_pdf_entries() -> None:
     settings = Settings()
 

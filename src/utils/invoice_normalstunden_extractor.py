@@ -51,7 +51,28 @@ def extract_normalstunden_from_bytes(
 ) -> dict[str, Any]:
     """Extract Normalstunden from browser-uploaded PDF bytes without filesystem access."""
     text = extract_text_from_pdf(pdf_bytes)
-    parsed = extract_client_and_products_from_invoices(text) if text.strip() else {}
+    if not text.strip():
+        return {
+            "file_name": filename,
+            "supplier": supplier_hint,
+            "hours_total": None,
+            "hourly_rates": [],
+            "entries": [],
+            "status": "failed",
+            "error": "No readable text was found in this invoice.",
+        }
+    parsed = extract_client_and_products_from_invoices(text)
+
+    if isinstance(parsed, dict) and parsed.get("error"):
+        return {
+            "file_name": filename,
+            "supplier": supplier_hint,
+            "hours_total": None,
+            "hourly_rates": [],
+            "entries": [],
+            "status": "failed",
+            "error": "This invoice could not be analyzed. Review the source document and try again.",
+        }
 
     supplier = _resolve_supplier(parsed, supplier_hint)
     entries = _extract_ai_normalstunden_entries(parsed)

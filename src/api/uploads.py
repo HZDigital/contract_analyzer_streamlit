@@ -88,15 +88,23 @@ async def validate_uploads(
         raise _bad_request("Each uploaded file must have exactly one role.")
 
     roles_by_name: dict[str, str] = {}
+    normalized_names: set[str] = set()
     for item in file_roles:
-        if item.name in roles_by_name:
+        normalized_name = item.name.casefold()
+        if normalized_name in normalized_names:
             raise _bad_request("Duplicate uploaded filenames are not supported.")
+        normalized_names.add(normalized_name)
         roles_by_name[item.name] = item.role
 
     validated: list[ValidatedUpload] = []
+    uploaded_names: set[str] = set()
     total_size = 0
     for upload in files:
         name = safe_filename(upload.filename)
+        normalized_name = name.casefold()
+        if normalized_name in uploaded_names:
+            raise _bad_request("Duplicate uploaded filenames are not supported.")
+        uploaded_names.add(normalized_name)
         role = roles_by_name.get(name)
         if role is None or role not in specification:
             raise _bad_request(f"{name} has an invalid role for this workflow.")

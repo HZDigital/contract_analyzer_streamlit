@@ -50,6 +50,54 @@
     },
     {
       "enabled": true,
+      "name": "delete-temporary-analyzer-sources",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": { "baseBlob": { "delete": { "daysAfterModificationGreaterThan": 60 } } },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["contract-analyzer/"],
+          "blobIndexMatch": [
+            { "name": "kind", "op": "==", "value": "source" },
+            { "name": "retention", "op": "==", "value": "temporary" }
+          ]
+        }
+      }
+    },
+    {
+      "enabled": true,
+      "name": "delete-transient-analyzer-artifacts",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": { "baseBlob": { "delete": { "daysAfterModificationGreaterThan": 7 } } },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["contract-analyzer/"],
+          "blobIndexMatch": [
+            { "name": "kind", "op": "==", "value": "artifact" },
+            { "name": "retention", "op": "==", "value": "transient" }
+          ]
+        }
+      }
+    },
+    {
+      "enabled": true,
+      "name": "delete-transient-analyzer-context",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": { "baseBlob": { "delete": { "daysAfterModificationGreaterThan": 7 } } },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["contract-analyzer/"],
+          "blobIndexMatch": [
+            { "name": "kind", "op": "==", "value": "context" },
+            { "name": "retention", "op": "==", "value": "transient" }
+          ]
+        }
+      }
+    },
+    {
+      "enabled": true,
       "name": "delete-transient-analyzer-inputs",
       "type": "Lifecycle",
       "definition": {
@@ -59,6 +107,38 @@
           "prefixMatch": ["contract-analyzer/"],
           "blobIndexMatch": [
             { "name": "kind", "op": "==", "value": "input" },
+            { "name": "retention", "op": "==", "value": "transient" }
+          ]
+        }
+      }
+    },
+    {
+      "enabled": true,
+      "name": "delete-transient-analyzer-sources",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": { "baseBlob": { "delete": { "daysAfterModificationGreaterThan": 7 } } },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["contract-analyzer/"],
+          "blobIndexMatch": [
+            { "name": "kind", "op": "==", "value": "source" },
+            { "name": "retention", "op": "==", "value": "transient" }
+          ]
+        }
+      }
+    },
+    {
+      "enabled": true,
+      "name": "delete-transient-analyzer-outcomes",
+      "type": "Lifecycle",
+      "definition": {
+        "actions": { "baseBlob": { "delete": { "daysAfterModificationGreaterThan": 7 } } },
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["contract-analyzer/"],
+          "blobIndexMatch": [
+            { "name": "kind", "op": "==", "value": "outcome" },
             { "name": "retention", "op": "==", "value": "transient" }
           ]
         }

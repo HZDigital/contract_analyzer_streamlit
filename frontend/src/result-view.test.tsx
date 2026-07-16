@@ -6,6 +6,8 @@ describe("ResultView", () => {
   it("renders detailed-contract results as document and analysis tables", () => {
     const markup = renderToStaticMarkup(
       <ResultView
+        sources={[{ id: "source-1", name: "agreement.pdf", role: "contracts", contentType: "application/pdf", previewable: true }]}
+        onOpenReference={() => undefined}
         value={{
           workflow: "detailed_contract",
           summary: { total: 1, successful: 1, failed: 0 },
@@ -25,11 +27,17 @@ describe("ResultView", () => {
       />,
     );
 
-    expect(markup).toContain("Document overview");
-    expect(markup).toContain("Products and services");
-    expect(markup).toContain("Key clauses");
-    expect(markup).toContain("Risk areas");
+    expect(markup).toContain("Analysis at a glance");
+    expect(markup).toContain("Commercial scope");
+    expect(markup).toContain("Contractual provisions");
+    expect(markup).toContain("Risks and actions");
     expect(markup).toContain("Example GmbH");
+    expect(markup).toContain("result-evidence-cell");
+    expect(markup).toContain("View in source");
+    expect(markup).toContain("Locate quote");
+    expect(markup).toContain("document-result-disclosure");
+    expect(markup).toContain("document-result-toggle");
+    expect(markup).not.toContain("Document overview");
   });
 
   it("keeps non-document results structured instead of serializing raw JSON", () => {
@@ -40,5 +48,28 @@ describe("ResultView", () => {
     expect(markup).toContain("Comparisons");
     expect(markup).toContain("Weight");
     expect(markup).not.toContain("&quot;workflow&quot;");
+  });
+
+  it("hides implementation fields and treats no-match as a neutral outcome", () => {
+    const markup = renderToStaticMarkup(
+      <ResultView value={{
+        workflow: "normalstunden",
+        summary: { total: 1, successful: 0, failed: 0, no_match: 1 },
+        results: [{
+          file_name: "invoice.pdf",
+          status: "no_match",
+          supplier: "Example GmbH",
+          file_path: "/private/input.pdf",
+          supplier_folder: "internal-folder",
+          matched_rows: 0,
+        }],
+      }} />,
+    );
+
+    expect(markup).toContain("No regular hours found");
+    expect(markup).toContain("status-queued");
+    expect(markup).not.toContain("private/input.pdf");
+    expect(markup).not.toContain("internal-folder");
+    expect(markup).not.toContain("Matched Rows");
   });
 });

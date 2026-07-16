@@ -1,7 +1,9 @@
 import { InteractionStatus, type AccountInfo, type IPublicClientApplication } from "@azure/msal-browser";
 import { useIsAuthenticated, useMsal } from "@azure/msal-react";
 import {
+  lazy,
   startTransition,
+  Suspense,
   useDeferredValue,
   useEffect,
   useRef,
@@ -12,15 +14,28 @@ import {
 import { AnalyzerApi, AuthRedirectStartedError, errorMessage } from "./api";
 import { getOrStartSsoAttempt } from "./auth-bootstrap";
 import { analyzerApiScopes } from "./config";
+import { deploymentName, logoUrl, type DeploymentConfig } from "./deployment-config";
 import { hasActiveJobs, isTerminalJob } from "./jobs";
 import { ResultView } from "./result-view";
-import type { AnalyzerJob, OptionValue, Retention, SubmittedFile } from "./types";
-import { workflows, workflowById, workflowTitle, type FileInputDefinition, type OptionDefinition, type WorkflowDefinition, type WorkflowId } from "./workflows";
+import type { AnalyzerJob, OptionValue, ResultReference, Retention, SubmittedFile } from "./types";
+import {
+  analysisModules,
+  moduleById,
+  workflowById,
+  workflowTitle,
+  type AnalysisModuleDefinition,
+  type AnalysisModuleId,
+  type FileInputDefinition,
+  type OptionDefinition,
+  type WorkflowDefinition,
+  type WorkflowId,
+} from "./workflows";
 
 type View = "dashboard" | "submit" | "history";
 type NormalstundenSource = "pdf" | "zip";
 
 const POLLING_INTERVAL_MS = 8_000;
+const SourcePreviewDrawer = lazy(() => import("./source-preview-drawer"));
 
 function formatDate(value?: string): string {
   if (!value) {
@@ -44,6 +59,49 @@ function formatFileSize(size: number): string {
     return `${Math.round(size / 1024)} KB`;
   }
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function fileTypeLabel(contentType?: string, filename?: string): string {
+  const extension = filename?.split(".").pop()?.toLowerCase();
+  if (contentType === "application/pdf" || extension === "pdf") {
+    return "PDF document";
+  }
+  if (contentType?.includes("spreadsheet") || extension === "xlsx") {
+    return "Excel workbook";
+  }
+  if (contentType?.includes("wordprocessingml") || contentType === "application/msword" || extension === "docx" || extension === "doc") {
+    return "Word document";
+  }
+  if (contentType === "text/csv" || contentType?.startsWith("text/csv;") || extension === "csv") {
+    return "CSV data";
+  }
+  if (contentType?.includes("json") || extension === "json") {
+    return "JSON data";
+  }
+  if (contentType?.includes("markdown") || extension === "md") {
+    return "Review report";
+  }
+  if (contentType?.includes("zip") || extension === "zip") {
+    return "ZIP archive";
+  }
+  return "File";
+}
+
+function sourceRoleLabel(role: string): string {
+  const labels: Record<string, string> = {
+    requests: "Request document",
+    invoices: "Invoice",
+    normalstundenPdfs: "Invoice",
+    normalstundenArchive: "Invoice archive",
+    contracts: "Contract",
+    contract: "Contract",
+    tenderDocuments: "Tender document",
+    tenderTemplate: "Tender template",
+    supplierAgreements: "Supplier agreement",
+    standardContract: "Standard contract",
+    comparisonDocuments: "Specification or certificate",
+  };
+  return labels[role] ?? "Source document";
 }
 
 function statusClass(status: string): string {
@@ -166,15 +224,18 @@ function useJobs(instance: IPublicClientApplication, account: AccountInfo | unde
 }
 
 export function ConfigurationError({
+  config,
   missingSettings,
   initializationError,
 }: {
+  config: DeploymentConfig;
   missingSettings?: string[];
   initializationError?: string;
 }) {
   return (
     <main className="setup-page">
       <section className="setup-card" aria-labelledby="setup-title">
+        <BrandLogo config={config} logo={config.login_logo ?? config.header_logo} surface="light" />
         <p className="eyebrow">Contract analyzer</p>
         <h1 id="setup-title">Authentication needs configuration</h1>
         <p>
@@ -190,7 +251,7 @@ export function ConfigurationError({
   );
 }
 
-function SignInScreen() {
+function SignInScreen({ config }: { config: DeploymentConfig }) {
   const { instance, inProgress } = useMsal();
   const [error, setError] = useState<string>();
 
@@ -206,7 +267,8 @@ function SignInScreen() {
   return (
     <main className="setup-page">
       <section className="setup-card" aria-labelledby="sign-in-title">
-        <p className="eyebrow">Lizzy</p>
+        <BrandLogo config={config} logo={config.login_logo ?? config.header_logo} surface="light" />
+        <p className="eyebrow">{deploymentName(config)}</p>
         <h1 id="sign-in-title">Contract Analyzer</h1>
         <p>Analyze commercial documents, review contracts, and retrieve auditable results in one secure workspace.</p>
         {error ? <p className="inline-error" role="alert">{error}</p> : null}
@@ -218,7 +280,7 @@ function SignInScreen() {
   );
 }
 
-function App() {
+function App({ config }: { config: DeploymentConfig }) {
   const { instance, accounts, inProgress } = useMsal();
   const isAuthenticated = useIsAuthenticated();
   const activeAccountId = instance.getActiveAccount()?.homeAccountId;
@@ -226,9 +288,18 @@ function App() {
   const [ssoResolved, setSsoResolved] = useState(false);
   const ssoAttempt = useRef<Promise<AccountInfo | undefined> | undefined>(undefined);
   const [view, setView] = useState<View>("dashboard");
-  const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowId>("product_request");
+  const [selectedModuleId, setSelectedModuleId] = useState<AnalysisModuleId>("contract_review");
+  const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowId>("detailed_contract");
   const [selectedJobId, setSelectedJobId] = useState<string>();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [submissionPending, setSubmissionPending] = useState(false);
+  const mobileMenuRef = useRef<HTMLButtonElement>(null);
+  const mobileCloseRef = useRef<HTMLButtonElement>(null);
   const { jobs, loading, error, refresh } = useJobs(instance, account);
+  const modules = analysisModules;
+  const query = typeof window === "undefined" ? undefined : new URLSearchParams(window.location.search);
+  const hideAccountPanel = query?.has("imbedded") === true || query?.has("embedded") === true;
 
   useEffect(() => {
     if (account && !instance.getActiveAccount()) {
@@ -277,6 +348,21 @@ function App() {
     };
   }, [account, inProgress, instance, ssoResolved]);
 
+  useEffect(() => {
+    if (!mobileSidebarOpen) {
+      return;
+    }
+    mobileCloseRef.current?.focus();
+    function closeOnEscape(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        setMobileSidebarOpen(false);
+        window.requestAnimationFrame(() => mobileMenuRef.current?.focus());
+      }
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileSidebarOpen]);
+
   if (inProgress === InteractionStatus.Startup || inProgress === InteractionStatus.HandleRedirect) {
     return <LoadingScreen />;
   }
@@ -286,14 +372,35 @@ function App() {
   }
 
   if (!isAuthenticated || !account) {
-    return <SignInScreen />;
+    return <SignInScreen config={config} />;
   }
 
-  const activeWorkflow = workflowById(selectedWorkflow) ?? workflows[0];
+  const activeModule = moduleById(selectedModuleId) ?? modules[0];
+  const activeWorkflow = workflowById(selectedWorkflow) ?? workflowById(activeModule.defaultWorkflowId)!;
 
-  function openWorkflow(workflowId: WorkflowId): void {
-    setSelectedWorkflow(workflowId);
+  function openModule(moduleId: AnalysisModuleId): void {
+    if (submissionPending) {
+      return;
+    }
+    const module = moduleById(moduleId);
+    if (!module) {
+      return;
+    }
+    setSelectedModuleId(moduleId);
+    setSelectedWorkflow(module.defaultWorkflowId);
     setView("submit");
+    setMobileSidebarOpen(false);
+  }
+
+  function openView(nextView: View): void {
+    if (submissionPending) {
+      return;
+    }
+    if (nextView === "history") {
+      setSelectedJobId(undefined);
+    }
+    setView(nextView);
+    setMobileSidebarOpen(false);
   }
 
   function openJob(jobId: string): void {
@@ -314,59 +421,90 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className={sidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"}>
+      <button
+        className={mobileSidebarOpen ? "sidebar-backdrop open" : "sidebar-backdrop"}
+        type="button"
+        aria-label="Close navigation"
+        onClick={() => {
+          setMobileSidebarOpen(false);
+          window.requestAnimationFrame(() => mobileMenuRef.current?.focus());
+        }}
+      />
+      <aside className={mobileSidebarOpen ? "sidebar mobile-open" : "sidebar"}>
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">L</span>
-          <span>
-            <strong>Lizzy</strong>
+          <BrandLogo config={config} logo={config.header_logo ?? config.login_logo} surface="dark" compact />
+          <span className="collapsed-brand-mark" aria-hidden="true">{deploymentName(config).slice(0, 1).toUpperCase()}</span>
+          <span className="brand-copy">
+            <strong>{deploymentName(config)}</strong>
             <small>Contract Analyzer</small>
           </span>
+          <button
+            className="mobile-close"
+            ref={mobileCloseRef}
+            type="button"
+            aria-label="Close navigation"
+            onClick={() => {
+              setMobileSidebarOpen(false);
+              window.requestAnimationFrame(() => mobileMenuRef.current?.focus());
+            }}
+          >X</button>
         </div>
         <nav className="primary-nav" aria-label="Main navigation">
-          <button className={view === "dashboard" ? "nav-button active" : "nav-button"} type="button" onClick={() => setView("dashboard")}>
-            Overview
+          <button className={view === "dashboard" ? "nav-button active" : "nav-button"} type="button" title="Overview" disabled={submissionPending} onClick={() => openView("dashboard")}>
+            <span className="nav-icon" aria-hidden="true">OV</span><span className="nav-label">Overview</span>
           </button>
-          <button className={view === "history" ? "nav-button active" : "nav-button"} type="button" onClick={() => setView("history")}>
-            Job history
+          <button className={view === "history" ? "nav-button active" : "nav-button"} type="button" title="Job history" disabled={submissionPending} onClick={() => openView("history")}>
+            <span className="nav-icon" aria-hidden="true">JB</span><span className="nav-label">Job history</span>
           </button>
         </nav>
         <div className="workflow-nav">
           <p>New analysis</p>
-          {workflows.map((workflow) => (
+          {modules.map((module) => (
             <button
-              className={view === "submit" && selectedWorkflow === workflow.id ? "workflow-link active" : "workflow-link"}
-              key={workflow.id}
+              className={view === "submit" && selectedModuleId === module.id ? "workflow-link active" : "workflow-link"}
+              key={module.id}
               type="button"
-              onClick={() => openWorkflow(workflow.id)}
+              title={module.title}
+              disabled={submissionPending}
+              onClick={() => openModule(module.id)}
             >
-              <span>{workflow.shortCode}</span>
-              {workflow.title}
+              <span>{module.shortCode}</span>
+              <span className="nav-label">{module.title}</span>
             </button>
           ))}
         </div>
-        <div className="account-panel">
-          <span className="account-initial" aria-hidden="true">{(account.name ?? account.username).slice(0, 1).toUpperCase()}</span>
-          <span className="account-name" title={account.username}>{account.name ?? account.username}</span>
-          <button className="text-button" type="button" onClick={() => void signOut()}>Sign out</button>
-        </div>
+        {hideAccountPanel ? null : (
+          <div className="account-panel">
+            <span className="account-initial" aria-hidden="true">{(account.name ?? account.username).slice(0, 1).toUpperCase()}</span>
+            <span className="account-name nav-label" title={account.username}>{account.name ?? account.username}</span>
+            <button className="text-button nav-label" type="button" onClick={() => void signOut()}>Sign out</button>
+          </div>
+        )}
+        <button className={hideAccountPanel ? "sidebar-toggle account-hidden" : "sidebar-toggle"} type="button" title={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"} onClick={() => setSidebarCollapsed((current) => !current)}>
+          <span aria-hidden="true">{sidebarCollapsed ? ">" : "<"}</span><span className="nav-label">Collapse</span>
+        </button>
       </aside>
       <main className="main-content">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Secure document workspace</p>
-            <h1>{view === "submit" ? activeWorkflow.title : view === "history" ? "Job history" : "Analysis overview"}</h1>
+        <header className={view === "submit" ? "topbar settings-page-header" : "topbar"}>
+          <button className="mobile-menu" ref={mobileMenuRef} type="button" aria-label="Open navigation" aria-expanded={mobileSidebarOpen} onClick={() => setMobileSidebarOpen(true)}>Menu</button>
+          <div className="topbar-copy">
+            <h1>{view === "submit" ? activeModule.title : view === "history" ? selectedJobId ? "Analysis result" : "Job history" : "Analysis overview"}</h1>
+            {view === "submit" ? <p>{activeWorkflow.detail}</p> : null}
           </div>
           <button className="secondary-button" type="button" onClick={refresh}>Refresh jobs</button>
         </header>
         {error ? <ErrorNotice message={error} onDismiss={refresh} /> : null}
-        {view === "dashboard" ? <Dashboard jobs={jobs} loading={loading} onOpenWorkflow={openWorkflow} onOpenJob={openJob} /> : null}
+        {view === "dashboard" ? <Dashboard modules={modules} jobs={jobs} loading={loading} onOpenModule={openModule} onOpenJob={openJob} /> : null}
         {view === "submit" ? (
           <WorkflowSubmission
             key={activeWorkflow.id}
+            module={activeModule}
             workflow={activeWorkflow}
             instance={instance}
             account={account}
+            onSelectWorkflow={setSelectedWorkflow}
+            onSubmittingChange={setSubmissionPending}
             onSubmitted={jobSubmitted}
           />
         ) : null}
@@ -387,6 +525,23 @@ function App() {
       </main>
     </div>
   );
+}
+
+function BrandLogo({
+  config,
+  logo,
+  surface,
+  compact = false,
+}: {
+  config: DeploymentConfig;
+  logo: DeploymentConfig["header_logo"];
+  surface: "light" | "dark";
+  compact?: boolean;
+}) {
+  const source = logoUrl(logo, surface);
+  return source
+    ? <img className={compact ? "brand-logo compact-logo" : "brand-logo"} src={source} alt={deploymentName(config)} />
+    : <span className={compact ? "brand-mark compact-logo" : "brand-mark"} aria-hidden="true">{deploymentName(config).slice(0, 1).toUpperCase()}</span>;
 }
 
 function LoadingScreen() {
@@ -410,14 +565,16 @@ function ErrorNotice({ message, onDismiss }: { message: string; onDismiss: () =>
 }
 
 function Dashboard({
+  modules,
   jobs,
   loading,
-  onOpenWorkflow,
+  onOpenModule,
   onOpenJob,
 }: {
+  modules: AnalysisModuleDefinition[];
   jobs: AnalyzerJob[];
   loading: boolean;
-  onOpenWorkflow: (workflow: WorkflowId) => void;
+  onOpenModule: (module: AnalysisModuleId) => void;
   onOpenJob: (jobId: string) => void;
 }) {
   const completed = jobs.filter((job) => job.status === "completed").length;
@@ -427,14 +584,6 @@ function Dashboard({
 
   return (
     <div className="page-stack">
-      <section className="hero-panel">
-        <div>
-          <p className="eyebrow">Document intelligence</p>
-          <h2>Choose a workflow and send the documents that need attention.</h2>
-          <p>Every analysis is tracked as a job, with results and generated files available from the history view.</p>
-        </div>
-        <button className="primary-button" type="button" onClick={() => onOpenWorkflow("detailed_contract")}>Start contract review</button>
-      </section>
       <section className="metric-grid" aria-label="Job status summary">
         <article><span>All jobs</span><strong>{loading ? "..." : jobs.length}</strong></article>
         <article><span>In progress</span><strong>{loading ? "..." : active}</strong></article>
@@ -444,19 +593,19 @@ function Dashboard({
       <section>
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Workflow library</p>
+            <p className="eyebrow">Analysis modules</p>
             <h2>What would you like to analyze?</h2>
           </div>
         </div>
         <div className="workflow-grid">
-          {workflows.map((workflow) => (
-            <article className="workflow-card" key={workflow.id}>
+          {modules.map((module) => (
+            <article className="workflow-card" key={module.id}>
               <div className="workflow-card-heading">
-                <span className="workflow-code">{workflow.shortCode}</span>
-                <h3>{workflow.title}</h3>
+                <span className="workflow-code">{module.shortCode}</span>
+                <h3>{module.title}</h3>
               </div>
-              <p>{workflow.description}</p>
-              <button className="card-button" type="button" onClick={() => onOpenWorkflow(workflow.id)}>Open workflow</button>
+              <p>{module.description}</p>
+              <button className="card-button" type="button" onClick={() => onOpenModule(module.id)}>Open module</button>
             </article>
           ))}
         </div>
@@ -489,14 +638,20 @@ function Dashboard({
 }
 
 function WorkflowSubmission({
+  module,
   workflow,
   instance,
   account,
+  onSelectWorkflow,
+  onSubmittingChange,
   onSubmitted,
 }: {
+  module: AnalysisModuleDefinition;
   workflow: WorkflowDefinition;
   instance: IPublicClientApplication;
   account: AccountInfo;
+  onSelectWorkflow: (workflow: WorkflowId) => void;
+  onSubmittingChange: (submitting: boolean) => void;
   onSubmitted: (job: AnalyzerJob | undefined) => void;
 }) {
   const [filesByInput, setFilesByInput] = useState<Record<string, File[]>>({});
@@ -535,6 +690,7 @@ function WorkflowSubmission({
       : options;
 
     setSubmitting(true);
+    onSubmittingChange(true);
     try {
       const job = await new AnalyzerApi(instance, account).submitJob({
         workflow: workflow.id,
@@ -550,6 +706,7 @@ function WorkflowSubmission({
       }
     } finally {
       setSubmitting(false);
+      onSubmittingChange(false);
     }
   }
 
@@ -559,16 +716,24 @@ function WorkflowSubmission({
 
   return (
     <div className="submission-layout">
-      <section className="submission-intro">
-        <span className="workflow-code large">{workflow.shortCode}</span>
-        <div>
-          <p className="eyebrow">New analysis</p>
-          <h2>{workflow.title}</h2>
-          <p>{workflow.detail}</p>
-        </div>
-      </section>
       <form className="submission-form" onSubmit={(event) => void submit(event)}>
         {error ? <p className="form-error" role="alert">{error}</p> : null}
+        {module.workflowIds.length > 1 ? (
+          <fieldset className="mode-selector">
+            <legend>Analysis mode</legend>
+            <div className="mode-options">
+              {module.workflowIds.map((workflowId) => {
+                const mode = workflowById(workflowId)!;
+                return (
+                  <button className={workflowId === workflow.id ? "mode-button selected" : "mode-button"} key={workflowId} type="button" disabled={submitting} onClick={() => onSelectWorkflow(workflowId)}>
+                    <strong>{mode.modeLabel}</strong>
+                    <span>{mode.detail}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
+        ) : null}
         {workflow.normalstundenSelection ? (
           <fieldset className="source-selector">
             <legend>Invoice input type</legend>
@@ -621,24 +786,34 @@ function WorkflowSubmission({
         ) : null}
         <fieldset className="retention-panel">
           <legend>Retention</legend>
-          <p>Source documents are removed after processing. Choose how long analysis results should remain available.</p>
+          <p>Source documents are retained with the analysis so evidence references can be reviewed later.</p>
           <div className="retention-options">
-            <label className={retention === "temporary" ? "choice-card selected" : "choice-card"}>
-              <input type="radio" name="retention" checked={retention === "temporary"} onChange={() => setRetention("temporary")} />
+            <button
+              className={retention === "temporary" ? "choice-card selected" : "choice-card"}
+              type="button"
+              aria-pressed={retention === "temporary"}
+              disabled={submitting}
+              onClick={() => setRetention("temporary")}
+            >
               <span>Temporary</span>
-              <small>Delete analysis results after 60 days.</small>
-            </label>
-            <label className={retention === "permanent" ? "choice-card selected" : "choice-card"}>
-              <input type="radio" name="retention" checked={retention === "permanent"} onChange={() => setRetention("permanent")} />
+              <small>Delete the analysis, exports, and source documents after 60 days.</small>
+            </button>
+            <button
+              className={retention === "permanent" ? "choice-card selected" : "choice-card"}
+              type="button"
+              aria-pressed={retention === "permanent"}
+              disabled={submitting}
+              onClick={() => setRetention("permanent")}
+            >
               <span>Permanent</span>
-              <small>Keep analysis results until they are deleted manually.</small>
-            </label>
+              <small>Keep the analysis, exports, and source documents until they are deleted manually.</small>
+            </button>
           </div>
         </fieldset>
         <div className="form-footer">
           <p>Files are uploaded only after you start the analysis.</p>
           <button className="primary-button" type="submit" disabled={submitting}>
-            {submitting ? "Submitting job..." : `Run ${workflow.title}`}
+            {submitting ? "Submitting job..." : `Run ${workflow.modeLabel}`}
           </button>
         </div>
       </form>
@@ -790,22 +965,44 @@ function HistoryPage({
   selectedJobId?: string;
   instance: IPublicClientApplication;
   account: AccountInfo;
-  onSelectJob: (id: string) => void;
+  onSelectJob: (id: string | undefined) => void;
   onDeleted: () => void;
 }) {
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const matchingJobs = deferredQuery
-    ? jobs.filter((job) => `${job.id} ${job.workflow} ${job.status} ${job.files.join(" ")}`.toLowerCase().includes(deferredQuery))
+    ? jobs.filter((job) => `${job.id} ${job.workflow} ${workflowTitle(job.workflow)} ${job.status} ${job.files.join(" ")}`.toLowerCase().includes(deferredQuery))
     : jobs;
   const selectedSummary = jobs.find((job) => job.id === selectedJobId);
 
+  if (selectedJobId && selectedSummary) {
+    return (
+      <div className="result-workspace">
+        <div className="result-workspace-navigation">
+          <button className="secondary-button compact" type="button" onClick={() => onSelectJob(undefined)}>
+            <span aria-hidden="true">&larr;</span> All analyses
+          </button>
+          <span>Analysis register / {workflowTitle(selectedSummary.workflow)}</span>
+        </div>
+        <JobDetails jobId={selectedJobId} summary={selectedSummary} instance={instance} account={account} onDeleted={onDeleted} />
+      </div>
+    );
+  }
+
   return (
-    <div className="history-layout">
-      <section className="history-list-panel">
+    <section className="history-index">
+      <div className="history-index-heading">
+        <div>
+          <p className="eyebrow">Analysis register</p>
+          <h2>Completed and active analyses</h2>
+          <p>Open an analysis to review extracted business data, findings, evidence, and exports.</p>
+        </div>
+        <span>{matchingJobs.length} {matchingJobs.length === 1 ? "analysis" : "analyses"}</span>
+      </div>
+      <div className="history-list-panel">
         <label className="search-field">
           <span>Search jobs</span>
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Workflow, file, or job ID" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Workflow, file, or analysis ID" />
         </label>
         {loading ? <p className="empty-state">Loading job history...</p> : null}
         {!loading && matchingJobs.length === 0 ? <p className="empty-state">No jobs match this search.</p> : null}
@@ -819,26 +1016,15 @@ function HistoryPage({
             >
               <span className="history-job-main">
                 <strong>{workflowTitle(job.workflow)}</strong>
-                <small>{job.files[0] ?? job.id}</small>
+                <small>{job.files[0] ?? "No source filename"}{job.files.length > 1 ? ` + ${job.files.length - 1} more` : ""}</small>
                 <small>{formatDate(job.createdAt)}</small>
               </span>
               <StatusBadge status={job.status} />
             </button>
           ))}
         </div>
-      </section>
-      <section className="job-detail-panel">
-        {selectedJobId && selectedSummary ? (
-          <JobDetails jobId={selectedJobId} summary={selectedSummary} instance={instance} account={account} onDeleted={onDeleted} />
-        ) : (
-          <div className="empty-detail">
-            <p className="eyebrow">Results and downloads</p>
-            <h2>Select a job</h2>
-            <p>Choose a job from the history to inspect its status, results, and generated artifacts.</p>
-          </div>
-        )}
-      </section>
-    </div>
+      </div>
+    </section>
   );
 }
 
@@ -864,6 +1050,7 @@ function JobDetails({
   const [error, setError] = useState<string>();
   const [downloadError, setDownloadError] = useState<string>();
   const [deleting, setDeleting] = useState(false);
+  const [selectedReference, setSelectedReference] = useState<ResultReference>();
   const accountId = account.homeAccountId;
   const accountRef = useRef(account);
   accountRef.current = account;
@@ -927,10 +1114,33 @@ function JobDetails({
     };
   }, [accountId, instance, jobId]);
 
+  useEffect(() => {
+    setSelectedReference(undefined);
+  }, [jobId]);
+
   async function download(artifactId: string, name: string): Promise<void> {
     setDownloadError(undefined);
     try {
       const downloaded = await new AnalyzerApi(instance, account).downloadArtifact(job.id, artifactId, name);
+      const objectUrl = URL.createObjectURL(downloaded.blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = downloaded.filename;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    } catch (downloadRequestError) {
+      if (!(downloadRequestError instanceof AuthRedirectStartedError)) {
+        setDownloadError(errorMessage(downloadRequestError));
+      }
+    }
+  }
+
+  async function downloadSource(sourceId: string, name: string): Promise<void> {
+    setDownloadError(undefined);
+    try {
+      const downloaded = await new AnalyzerApi(instance, account).downloadSource(job.id, sourceId, name);
       const objectUrl = URL.createObjectURL(downloaded.blob);
       const anchor = document.createElement("a");
       anchor.href = objectUrl;
@@ -964,60 +1174,136 @@ function JobDetails({
   }
 
   return (
-    <div className="detail-stack">
-      <div className="detail-header">
+    <div className="detail-stack result-workspace-detail">
+      <div className="detail-header result-detail-header">
         <div>
           <p className="eyebrow">{workflowTitle(job.workflow)}</p>
-          <h2>Job {job.id}</h2>
-          <p>{formatDate(job.createdAt)}</p>
+          <h2>{job.files[0] ?? "Analysis result"}</h2>
+          <p>Created {formatDate(job.createdAt)}{job.files.length > 1 ? ` / ${job.files.length} source files` : ""}</p>
         </div>
         <StatusBadge status={job.status} />
       </div>
       {error ? <p className="form-error" role="alert">{error}</p> : null}
-      {job.message ? <p className="job-message">{job.message}</p> : null}
+      {job.message && !isTerminalJob(job.status) ? <p className="job-message">{job.message}</p> : null}
       {job.error ? <p className="form-error" role="alert">{job.error}</p> : null}
-      {typeof job.progress === "number" ? (
-        <div className="progress-section">
-          <div><span>Progress</span><strong>{Math.max(0, Math.min(100, Math.round(job.progress)))}%</strong></div>
-          <progress value={Math.max(0, Math.min(100, job.progress))} max="100" />
+      <div className="result-workspace-grid">
+        <div className="result-primary-column">
+          <section className="detail-section results-showcase">
+            <div className="result-section-heading">
+              <div>
+                <p className="eyebrow">Consultant review</p>
+                <h3>Analysis findings</h3>
+              </div>
+                <p>Structured for business review with source-level evidence where the analysis provides a grounded reference.</p>
+            </div>
+            {loading ? <p className="empty-state">Refreshing job status...</p> : null}
+            {!loading && job.result === undefined ? <p className="empty-state">Results will appear here when this job completes.</p> : null}
+            {job.result !== undefined ? <ResultView value={job.result} sources={job.sources} onOpenReference={setSelectedReference} /> : null}
+          </section>
+          {job.workflow === "large_scanner" && job.status === "completed" ? <QuestionPanel jobId={job.id} instance={instance} account={account} /> : null}
         </div>
-      ) : null}
-      <div className="detail-meta">
-        <span><strong>Started</strong>{formatDate(job.startedAt)}</span>
-        <span><strong>Completed</strong>{formatDate(job.completedAt)}</span>
-        <span><strong>Files</strong>{job.files.length || "Not reported"}</span>
+        <aside className="result-context-panel" aria-label="Analysis details and exports">
+          {typeof job.progress === "number" && !isTerminalJob(job.status) ? (
+            <div className="progress-section">
+              <div><span>Progress</span><strong>{Math.max(0, Math.min(100, Math.round(job.progress)))}%</strong></div>
+              <progress value={Math.max(0, Math.min(100, job.progress))} max="100" />
+            </div>
+          ) : null}
+          <section className="result-context-section">
+            <p className="eyebrow">Run details</p>
+            <dl className="job-facts">
+              <div>
+                <dt>Retention</dt>
+                <dd>{!job.retention && loading ? "Loading..." : job.retention === "permanent" ? "Kept until deleted" : job.expiresAt ? `Scheduled deletion ${formatDate(job.expiresAt)}` : "Deleted 60 days after completion"}</dd>
+              </div>
+              <div><dt>Source files</dt><dd>{job.sources.length || job.files.length || "Not reported"}</dd></div>
+              <div><dt>Exports</dt><dd>{job.artifacts.length}</dd></div>
+            </dl>
+          </section>
+          {job.coverage.length > 0 ? (
+            <section className="result-context-section analysis-coverage">
+              <h3>Coverage and limitations</h3>
+              <ul>{job.coverage.map((note) => <li key={note}>{note}</li>)}</ul>
+            </section>
+          ) : null}
+          {job.sources.length > 0 ? (
+            <section className="result-context-section">
+              <h3>Source documents</h3>
+              <ul className="source-document-list">
+                {job.sources.map((source) => (
+                  <li key={source.id}>
+                    <span>
+                      <strong>{source.name}</strong>
+                      <small>{sourceRoleLabel(source.role)} / {fileTypeLabel(source.contentType, source.name)}{source.size ? ` / ${formatFileSize(source.size)}` : ""}</small>
+                    </span>
+                    {source.previewable ? (
+                      <button
+                        className="secondary-button compact"
+                        type="button"
+                        onClick={() => setSelectedReference({ sourceId: source.id, sourceName: source.name })}
+                      >
+                        Open
+                      </button>
+                    ) : (
+                      <button className="secondary-button compact" type="button" onClick={() => void downloadSource(source.id, source.name)}>Download</button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : job.files.length > 0 ? (
+            <section className="result-context-section">
+              <h3>Source documents</h3>
+              <p className="empty-state">
+                {job.status === "completed"
+                  ? "Source previews are unavailable for analyses completed before evidence retention was enabled."
+                  : job.status === "failed"
+                    ? "Source documents are retained only when an analysis completes successfully."
+                    : "Source documents will become available when the analysis completes."}
+              </p>
+              <ul className="simple-list">{job.files.map((file) => <li key={file}>{file}</li>)}</ul>
+            </section>
+          ) : null}
+          <section className="result-context-section">
+            <h3>Exports</h3>
+            {downloadError ? <p className="form-error" role="alert">{downloadError}</p> : null}
+            {job.artifacts.length === 0 ? <p className="empty-state">No generated files are available yet.</p> : null}
+            <ul className="artifact-list">
+              {job.artifacts.map((artifact) => (
+                <li key={artifact.id}>
+                  <span><strong>{artifact.name}</strong><small>{fileTypeLabel(artifact.contentType, artifact.name)}{artifact.size ? ` / ${formatFileSize(artifact.size)}` : ""}</small></span>
+                  <button className="secondary-button compact" type="button" onClick={() => void download(artifact.id, artifact.name)}>Download</button>
+                </li>
+              ))}
+            </ul>
+          </section>
+          <details className="technical-details result-context-section">
+            <summary>Technical details</summary>
+            <dl className="job-facts">
+              <div><dt>Analysis ID</dt><dd className="technical-id">{job.id}</dd></div>
+              <div><dt>Started</dt><dd>{formatDate(job.startedAt)}</dd></div>
+              <div><dt>Completed</dt><dd>{formatDate(job.completedAt)}</dd></div>
+            </dl>
+          </details>
+          <div className="detail-actions">
+            <button className="danger-button" type="button" onClick={() => void deleteJob()} disabled={deleting}>
+              {deleting ? "Deleting..." : "Delete analysis"}
+            </button>
+          </div>
+        </aside>
       </div>
-      {job.files.length > 0 ? (
-        <section className="detail-section">
-          <h3>Source files</h3>
-          <ul className="simple-list">{job.files.map((file) => <li key={file}>{file}</li>)}</ul>
-        </section>
+      {selectedReference ? (
+        <Suspense fallback={null}>
+          <SourcePreviewDrawer
+            key={`${selectedReference.sourceId}-${selectedReference.page ?? "search"}-${selectedReference.quote ?? ""}`}
+            reference={selectedReference}
+            loadSource={(signal) => new AnalyzerApi(instance, account)
+              .downloadSource(job.id, selectedReference.sourceId, selectedReference.sourceName, signal)
+              .then((downloaded) => downloaded.blob)}
+            onClose={() => setSelectedReference(undefined)}
+          />
+        </Suspense>
       ) : null}
-      <section className="detail-section">
-        <h3>Results</h3>
-        {loading ? <p className="empty-state">Refreshing job status...</p> : null}
-        {!loading && job.result === undefined ? <p className="empty-state">Results will appear here when this job completes.</p> : null}
-        {job.result !== undefined ? <ResultView value={job.result} /> : null}
-      </section>
-      <section className="detail-section">
-        <h3>Downloads</h3>
-        {downloadError ? <p className="form-error" role="alert">{downloadError}</p> : null}
-        {job.artifacts.length === 0 ? <p className="empty-state">No generated files are available yet.</p> : null}
-        <ul className="artifact-list">
-          {job.artifacts.map((artifact) => (
-            <li key={artifact.id}>
-              <span><strong>{artifact.name}</strong><small>{artifact.contentType ?? "Generated file"}{artifact.size ? ` - ${formatFileSize(artifact.size)}` : ""}</small></span>
-              <button className="secondary-button compact" type="button" onClick={() => void download(artifact.id, artifact.name)}>Download</button>
-            </li>
-          ))}
-        </ul>
-      </section>
-      {job.workflow === "large_scanner" ? <QuestionPanel jobId={job.id} instance={instance} account={account} /> : null}
-      <div className="detail-actions">
-        <button className="danger-button" type="button" onClick={() => void deleteJob()} disabled={deleting}>
-          {deleting ? "Deleting..." : "Delete job"}
-        </button>
-      </div>
     </div>
   );
 }

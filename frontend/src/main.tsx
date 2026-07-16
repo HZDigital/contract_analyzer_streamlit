@@ -4,15 +4,20 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App, { ConfigurationError } from "./App";
 import { hasMsalConfiguration, missingMsalSettings, msalConfig } from "./config";
+import { applyDeploymentBranding, loadDeploymentConfig, loadExternalStylesheet } from "./deployment-config";
 import "./styles.css";
 
 const root = createRoot(document.getElementById("root")!);
+loadExternalStylesheet();
 
 async function start(): Promise<void> {
+  const deploymentConfigPromise = loadDeploymentConfig();
   if (!hasMsalConfiguration) {
+    const deploymentConfig = await deploymentConfigPromise;
+    applyDeploymentBranding(deploymentConfig);
     root.render(
       <StrictMode>
-        <ConfigurationError missingSettings={missingMsalSettings} />
+        <ConfigurationError config={deploymentConfig} missingSettings={missingMsalSettings} />
       </StrictMode>,
     );
     return;
@@ -20,19 +25,22 @@ async function start(): Promise<void> {
 
   try {
     const instance = new PublicClientApplication(msalConfig);
-    await instance.initialize();
-    await instance.handleRedirectPromise();
+    const authenticationPromise = instance.initialize().then(() => instance.handleRedirectPromise());
+    const [, deploymentConfig] = await Promise.all([authenticationPromise, deploymentConfigPromise]);
+    applyDeploymentBranding(deploymentConfig);
     root.render(
       <StrictMode>
         <MsalProvider instance={instance}>
-          <App />
+          <App config={deploymentConfig} />
         </MsalProvider>
       </StrictMode>,
     );
   } catch (error) {
+    const deploymentConfig = await deploymentConfigPromise;
+    applyDeploymentBranding(deploymentConfig);
     root.render(
       <StrictMode>
-        <ConfigurationError initializationError={error instanceof Error ? error.message : "MSAL could not initialize."} />
+        <ConfigurationError config={deploymentConfig} initializationError={error instanceof Error ? error.message : "MSAL could not initialize."} />
       </StrictMode>,
     );
   }

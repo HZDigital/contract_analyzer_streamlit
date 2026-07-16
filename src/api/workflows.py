@@ -45,16 +45,17 @@ from src.utils.pdf_processor import (
     extract_pdf_pages,
     extract_text_from_file,
     extract_text_from_pdf,
-    get_text_length_info,
 )
 from src.utils.web_research import analyze_market_situation
 
+from .public_results import curate_public_result
 from .settings import get_settings
 from .uploads import expand_normalstunden_archive
 
 
 ProgressCallback = Callable[[int, str], None]
 logger = logging.getLogger(__name__)
+STANDARD_CONTRACT_CHARACTER_LIMIT = 30_000
 ANALYSIS_ERROR_MESSAGES = {
     "configuration_missing": "The analysis service is not configured.",
     "client_initialization_failed": "The analysis service configuration is invalid.",
@@ -151,17 +152,29 @@ def _run_product_request(
             if not text.strip():
                 raise ValueError("No readable text found in PDF")
             extracted = _json_mapping(extract_client_and_products(text))
-            results.append(
-                {
-                    "file_name": file.name,
-                    "status": "success",
-                    "client_name": extracted.get("client_name", "Not detected"),
-                    "products": _json_list(extracted.get("products")),
-                    "contract_type": extracted.get("contract_type", "Unknown"),
-                    "total_estimated_value": extracted.get("total_estimated_value", "Not specified"),
-                    "error": extracted.get("error"),
-                }
-            )
+            if extracted.get("error"):
+                results.append(
+                    {
+                        "file_name": file.name,
+                        "status": "failed",
+                        "products": [],
+                        "error": _analysis_error_message(extracted),
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "file_name": file.name,
+                        "status": "success",
+                        "client_name": extracted.get("client_name", "Not detected"),
+                        "products": [
+                            _select_fields(product, "product_name", "quantity", "unit", "description")
+                            for product in _dict_list(extracted.get("products"))
+                        ],
+                        "contract_type": extracted.get("contract_type", "Unknown"),
+                        "total_estimated_value": extracted.get("total_estimated_value", "Not specified"),
+                    }
+                )
         except Exception as exc:  # noqa: BLE001
             results.append({"file_name": file.name, "status": "failed", "products": [], "error": _safe_document_error(exc)})
         progress(_file_progress(index, total, 5, 70), f"Processed {file.name}")
@@ -183,12 +196,17 @@ def _run_product_request(
     should_group = _option_bool(options, "groupSimilarProducts", "group_similar_products", default=True)
     grouping = _json_mapping(group_similar_products(products)) if products and should_group else {"groups": []}
     consolidated = _consolidate_products(products, _dict_list(grouping.get("groups"))) if should_group else []
+    warnings = []
+    if grouping.get("error"):
+        warnings.append(
+            "Products were extracted, but similar products could not be consolidated. Review each document result separately."
+        )
     payload = {
         "workflow": "product_request",
         "summary": _summary(results),
         "results": results,
         "consolidated_products": consolidated,
-        "grouping_error": grouping.get("error"),
+        "warnings": warnings,
     }
     artifacts = [
         _json_artifact("product_request_results.json", payload),
@@ -214,7 +232,23 @@ def _run_invoice(
             if not text.strip():
                 raise ValueError("No readable text found in PDF")
             extracted = _json_mapping(extract_client_and_products_from_invoices(text))
-            results.append({"file_name": file.name, "status": "success", **extracted})
+            if extracted.get("error"):
+                results.append(
+                    {
+                        "file_name": file.name,
+                        "status": "failed",
+                        "products": [],
+                        "error": _analysis_error_message(extracted),
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "file_name": file.name,
+                        "status": "success",
+                        **_invoice_fields(extracted),
+                    }
+                )
         except Exception as exc:  # noqa: BLE001
             results.append({"file_name": file.name, "status": "failed", "products": [], "error": _safe_document_error(exc)})
         progress(_file_progress(index, total, 5, 80), f"Processed {file.name}")
@@ -279,11 +313,9 @@ def _run_normalstunden(
 
 
 def _run_detailed_contract(
-    files: list[WorkflowInput], options: Mapping[str, Any], progress: ProgressCallback
+    files: list[WorkflowInput], _options: Mapping[str, Any], progress: ProgressCallback
 ) -> WorkflowResult:
     results: list[dict[str, Any]] = []
-    requested_length = _optional_positive_int(options.get("truncateLength", options.get("truncate_length")))
-    analysis_depth = str(options.get("analysisDepth", options.get("analysis_depth", "standard"))).lower()
     total = len(files)
     for index, file in enumerate(files, 1):
         progress(_file_progress(index - 1, total, 5, 85), f"Extracting {file.name}")
@@ -291,12 +323,7 @@ def _run_detailed_contract(
             text = extract_text_from_pdf(file.data)
             if not text.strip():
                 raise ValueError("No readable text found in PDF")
-            text_info = get_text_length_info(text)
-            default_length = 12000 if analysis_depth == "thorough" else 3500
-            truncate_length = min(
-                _bounded_int(requested_length, default_length, 1000, 30000),
-                text_info["length"],
-            )
+            truncate_length = min(STANDARD_CONTRACT_CHARACTER_LIMIT, len(text))
             analysis = _json_mapping(analyze_contract(text, max(1, truncate_length)))
             if analysis.get("error"):
                 results.append(
@@ -308,7 +335,13 @@ def _run_detailed_contract(
                     }
                 )
             else:
-                results.append({"file_name": file.name, "status": "success", "analysis": analysis})
+                results.append(
+                    {
+                        "file_name": file.name,
+                        "status": "success",
+                        "analysis": _curated_analysis("detailed_contract", analysis),
+                    }
+                )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Document processing failed: workflow=detailed_contract error_type=%s",
@@ -345,6 +378,7 @@ def _run_tender(
     template = template_files[0]
     workbook, worksheet, field_cells, source_cell = _load_tender_template(template.data)
     desired_fields = list(field_cells)
+    display_fields = _tender_display_fields(desired_fields)
     results: list[dict[str, Any]] = []
     total = len(tender_files)
     market_research = _option_bool(options, "includeMarketResearch", "include_market_research", default=True)
@@ -357,9 +391,26 @@ def _run_tender(
             analysis = _json_mapping(
                 analyze_tender_with_fields(text, desired_fields) if desired_fields else analyze_tender_document(text)
             )
-            if market_research and "error" not in analysis:
-                _add_market_situation(analysis)
-            results.append({"file_name": file.name, "status": "success", "analysis": analysis})
+            if analysis.get("error"):
+                results.append(
+                    {
+                        "file_name": file.name,
+                        "status": "failed",
+                        "error": _analysis_error_message(analysis),
+                        "analysis": {},
+                    }
+                )
+            else:
+                _limit_tender_fields(analysis, display_fields, template_fields=bool(desired_fields))
+                if market_research:
+                    _add_market_situation(analysis)
+                results.append(
+                    {
+                        "file_name": file.name,
+                        "status": "success",
+                        "analysis": _curated_analysis("tender", analysis, display_fields=display_fields),
+                    }
+                )
         except Exception as exc:  # noqa: BLE001
             results.append({"file_name": file.name, "status": "failed", "error": _safe_document_error(exc), "analysis": {}})
         progress(_file_progress(index, total, 10, 75), f"Processed tender {file.name}")
@@ -379,6 +430,7 @@ def _run_tender(
         "workflow": "tender",
         "summary": _summary(results),
         "template_name": template.name,
+        "_display_fields": display_fields,
         "results": results,
         "merged": merged,
     }
@@ -426,6 +478,9 @@ def _run_cooperation_review(
             include_recommendations=_option_bool(options, "includeRecommendations", "include_recommendations", default=True),
         )
     )
+    if analysis.get("error"):
+        raise RuntimeError("The analysis service could not compare the supplied agreements.")
+    analysis = _curated_analysis("cooperation_review", analysis)
     payload = {
         "workflow": "cooperation_review",
         "standard_contract": standards[0].name,
@@ -470,6 +525,9 @@ def _run_factory_certificate(
         raise ValueError("Factory certificate comparison needs at least two readable documents.")
     progress(65, "Comparing specifications and certificates")
     analysis = _json_mapping(compare_factory_documents(texts))
+    if analysis.get("error"):
+        raise RuntimeError("The analysis service could not compare the supplied quality documents.")
+    analysis = _curated_analysis("factory_certificate", analysis)
     rows = _dict_list(analysis.get("comparisons"))
     payload = {
         "workflow": "factory_certificate",
@@ -526,6 +584,8 @@ def _run_large_scanner(
         progress(_file_progress(done, total, 20, 75), message)
 
     chunk_results = analyze_contract_chunks(chunks, progress_callback=on_chunk)
+    if chunk_results and all(result.get("error") for result in chunk_results):
+        raise RuntimeError("The analysis service could not process the contract sections.")
     progress(80, "Merging contract evidence")
     merged = merge_chunk_findings(chunk_results, chunks)
     report = synthesize_contract_analysis(merged, is_complete_document=complete)
@@ -620,7 +680,7 @@ def _load_tender_template(data: bytes) -> tuple[Any, Any, dict[str, tuple[int, i
         if len(row) >= 5:
             label = row[4].value
             if isinstance(label, str) and label.strip().endswith(":"):
-                field_cells[label.strip().rstrip(":")] = (row[4].row, 6)
+                field_cells[label.strip().rstrip(":").strip()] = (row[4].row, 6)
     return workbook, worksheet, field_cells, source_cell
 
 
@@ -634,11 +694,50 @@ def _add_market_situation(analysis: dict[str, Any]) -> None:
     if not customer and not project:
         return
     market = _json_mapping(analyze_market_situation(customer, project, country))
-    for key in ("Vermutliche Wettbewerber", "Letzter Tender", "Split möglich", "Chancen in %"):
+    market.pop("Chancen in %", None)
+    extracted.pop("Chancen in %", None)
+    for key in ("Vermutliche Wettbewerber", "Letzter Tender", "Split möglich"):
         if key in extracted:
             extracted[key] = market.get(key, "Nicht angegeben")
     analysis["extracted"] = extracted
     analysis["market_situation"] = market
+
+
+def _tender_display_fields(desired_fields: list[str]) -> list[str]:
+    blocked = {"chancen in %", "chance in %", "win probability"}
+    if desired_fields:
+        return [field for field in desired_fields if field.strip().lower() not in blocked]
+    return [
+        "customer",
+        "project_title",
+        "reference_number",
+        "procedure",
+        "submission_deadline",
+        "questions_deadline",
+        "contract_start",
+        "contract_end",
+        "estimated_value",
+        "country",
+        "language",
+        "cpv_codes",
+        "notes",
+    ]
+
+
+def _limit_tender_fields(
+    analysis: dict[str, Any], display_fields: list[str], *, template_fields: bool
+) -> None:
+    if template_fields:
+        extracted = _json_mapping(analysis.get("extracted"))
+        analysis["extracted"] = {
+            field: extracted[field] for field in display_fields if field in extracted
+        }
+        return
+
+    tender_fields = _json_mapping(analysis.get("tender_fields"))
+    analysis["tender_fields"] = {
+        field: tender_fields[field] for field in display_fields if field in tender_fields
+    }
 
 
 def _merge_tender_results(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -651,6 +750,8 @@ def _merge_tender_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         analysis = _json_mapping(result.get("analysis"))
         extracted = _json_mapping(analysis.get("extracted", analysis.get("tender_fields", {})))
         for field, value in extracted.items():
+            if field.strip().lower() in {"chancen in %", "chance in %", "win probability"}:
+                continue
             existing = merged["extracted"].get(field)
             if not existing or existing == "Nicht angegeben":
                 merged["extracted"][field] = value
@@ -734,16 +835,18 @@ def _consolidate_products(products: list[dict[str, Any]], groups: list[dict[str,
                 unique_clients.setdefault(str(product["client_name"]), product)
         if len(unique_clients) < 2:
             continue
-        row: dict[str, Any] = {"product": group.get("canonical_name", "Unknown Product")}
-        for index, (client, product) in enumerate(unique_clients.items(), 1):
-            row.update(
+        row: dict[str, Any] = {
+            "product": group.get("canonical_name", "Unknown Product"),
+            "requests": [
                 {
-                    f"client_{index}": client,
-                    f"original_name_{index}": product.get("product_name", ""),
-                    f"quantity_{index}": f"{product.get('quantity', '')} {product.get('unit', '')}".strip(),
-                    f"contract_type_{index}": product.get("contract_type", ""),
+                    "client": client,
+                    "original_name": product.get("product_name", ""),
+                    "quantity": f"{product.get('quantity', '')} {product.get('unit', '')}".strip(),
+                    "contract_type": product.get("contract_type", ""),
                 }
-            )
+                for client, product in unique_clients.items()
+            ],
+        }
         consolidated.append(row)
     return consolidated
 
@@ -789,7 +892,6 @@ def _normalstunden_export_rows(results: list[dict[str, Any]]) -> list[dict[str, 
                     {
                         "file_name": result.get("file_name", ""),
                         "supplier": result.get("supplier", ""),
-                        "supplier_hint": result.get("supplier_folder", ""),
                         "hours": entry.get("hours_display", entry.get("hours", "")),
                         "hourly_rate": entry.get("hourly_rate_display", entry.get("hourly_rate", "")),
                         "status": result.get("status", ""),
@@ -800,7 +902,6 @@ def _normalstunden_export_rows(results: list[dict[str, Any]]) -> list[dict[str, 
                 {
                     "file_name": result.get("file_name", ""),
                     "supplier": result.get("supplier", ""),
-                    "supplier_hint": result.get("supplier_folder", ""),
                     "hours": result.get("hours_total", ""),
                     "hourly_rate": result.get("hourly_rate_display", ""),
                     "status": result.get("status", ""),
@@ -872,10 +973,83 @@ def _tender_markdown(merged: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _select_fields(value: Mapping[str, Any], *fields: str) -> dict[str, Any]:
+    return {field: value[field] for field in fields if field in value}
+
+
+def _curated_analysis(
+    workflow: str,
+    analysis: Mapping[str, Any],
+    *,
+    display_fields: list[str] | None = None,
+) -> dict[str, Any]:
+    value: dict[str, Any] = {"workflow": workflow}
+    if display_fields:
+        value["_display_fields"] = display_fields
+    if workflow in {"detailed_contract", "tender"}:
+        value["results"] = [{"status": "success", "analysis": analysis}]
+        result = curate_public_result(workflow, value)
+        rows = result.get("results")
+        if isinstance(rows, list) and rows and isinstance(rows[0], Mapping):
+            return _json_mapping(rows[0].get("analysis"))
+        return {}
+    value["analysis"] = analysis
+    result = curate_public_result(workflow, value)
+    return _json_mapping(result.get("analysis"))
+
+
+def _invoice_fields(extracted: Mapping[str, Any]) -> dict[str, Any]:
+    fields = _select_fields(
+        extracted,
+        "invoice_number",
+        "invoice_date",
+        "due_date",
+        "currency",
+        "total_amount",
+        "subtotal",
+        "tax_amount",
+        "tax_rate_percent",
+        "payment_terms",
+        "po_number",
+        "supplier_name",
+        "supplier_address",
+        "customer_name",
+        "customer_address",
+        "ship_to",
+        "tax_id",
+        "contract_type",
+        "notes",
+    )
+    fields["products"] = [
+        _select_fields(
+            product,
+            "product_name",
+            "description",
+            "quantity",
+            "unit",
+            "unit_price",
+            "line_total",
+            "currency",
+            "tax_rate_percent",
+            "sku_or_part_number",
+        )
+        for product in _dict_list(extracted.get("products"))
+    ]
+    return fields
+
+
 def _summary(results: Iterable[Mapping[str, Any]]) -> dict[str, int]:
     rows = list(results)
     successful = sum(row.get("status") == "success" for row in rows)
-    return {"total": len(rows), "successful": successful, "failed": len(rows) - successful}
+    no_match = sum(row.get("status") == "no_match" for row in rows)
+    summary = {
+        "total": len(rows),
+        "successful": successful,
+        "failed": sum(row.get("status") == "failed" for row in rows),
+    }
+    if no_match:
+        summary["no_match"] = no_match
+    return summary
 
 
 def _safe_document_error(error: Exception) -> str:
@@ -900,7 +1074,9 @@ def _analysis_error_message(analysis: Mapping[str, Any]) -> str:
 
 
 def _json_artifact(name: str, value: Any) -> WorkflowArtifact:
-    return WorkflowArtifact(_json_bytes(value), name, "application/json")
+    workflow = str(value.get("workflow", "")) if isinstance(value, Mapping) else ""
+    public_value = curate_public_result(workflow, value) if workflow else value
+    return WorkflowArtifact(_json_bytes(public_value), name, "application/json")
 
 
 def _json_bytes(value: Any) -> bytes:

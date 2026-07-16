@@ -74,6 +74,8 @@ jobs:
             VITE_MSAL_CLIENT_ID=${{ vars.VITE_MSAL_CLIENT_ID }}
             VITE_MSAL_AUTHORITY=${{ vars.VITE_MSAL_AUTHORITY }}
             VITE_MSAL_REDIRECT_URI=${{ vars.VITE_MSAL_REDIRECT_URI }}
+            VITE_DEPLOYMENT_CONFIGURATION=${{ vars.VITE_DEPLOYMENT_CONFIGURATION }}
+            VITE_DEPLOYMENT_CSS=${{ vars.VITE_DEPLOYMENT_CSS }}
 
       - name: Keep one replica available
         run: az containerapp update --name contractanalyzer --resource-group AIWebinarRAG01_RG --min-replicas 1
