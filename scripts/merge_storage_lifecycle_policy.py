@@ -24,6 +24,19 @@ def _load_rules(path: Path) -> list[dict[str, Any]]:
     return rules
 
 
+def _normalized_policy_value(value: Any) -> Any:
+    """Ignore optional null fields Azure adds when it returns a lifecycle policy."""
+    if isinstance(value, dict):
+        return {
+            key: _normalized_policy_value(item)
+            for key, item in value.items()
+            if item is not None
+        }
+    if isinstance(value, list):
+        return [_normalized_policy_value(item) for item in value]
+    return value
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--existing", type=Path, required=True)
@@ -38,7 +51,11 @@ def main() -> None:
 
     if args.verify:
         existing_by_name = {rule["name"]: rule for rule in existing}
-        invalid = [name for name, rule in required_by_name.items() if existing_by_name.get(name) != rule]
+        invalid = [
+            name
+            for name, rule in required_by_name.items()
+            if _normalized_policy_value(existing_by_name.get(name)) != _normalized_policy_value(rule)
+        ]
         if invalid:
             raise SystemExit(f"Required analyzer lifecycle rules are missing or changed: {', '.join(invalid)}")
         return
