@@ -310,9 +310,11 @@ function App({ config }: { config: DeploymentConfig }) {
   const [selectedJobId, setSelectedJobId] = useState<string>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [submissionPending, setSubmissionPending] = useState(false);
   const mobileMenuRef = useRef<HTMLButtonElement>(null);
   const mobileCloseRef = useRef<HTMLButtonElement>(null);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
   const { jobs, loading, error, refresh } = useJobs(instance, account);
   const modules = analysisModules;
   const query = typeof window === "undefined" ? undefined : new URLSearchParams(window.location.search);
@@ -379,6 +381,31 @@ function App({ config }: { config: DeploymentConfig }) {
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [mobileSidebarOpen]);
+
+  useEffect(() => {
+    if (!accountMenuOpen) {
+      return;
+    }
+
+    function closeOnOutsidePointer(event: PointerEvent): void {
+      if (!accountMenuRef.current?.contains(event.target as Node)) {
+        setAccountMenuOpen(false);
+      }
+    }
+
+    function closeOnEscape(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        setAccountMenuOpen(false);
+      }
+    }
+
+    window.addEventListener("pointerdown", closeOnOutsidePointer);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnOutsidePointer);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [accountMenuOpen]);
 
   if (inProgress === InteractionStatus.Startup || inProgress === InteractionStatus.HandleRedirect) {
     return <LoadingScreen />;
@@ -449,23 +476,16 @@ function App({ config }: { config: DeploymentConfig }) {
         }}
       />
       <aside className={mobileSidebarOpen ? "sidebar mobile-open" : "sidebar"}>
-        <div className="brand">
-          <BrandLogo config={config} logo={config.header_logo ?? config.login_logo} surface="dark" compact />
-          <span className="collapsed-brand-mark" aria-hidden="true">{deploymentName(config).slice(0, 1).toUpperCase()}</span>
-          <span className="brand-copy">
-            <strong>{deploymentName(config)}</strong>
-            <small>Contract Analyzer</small>
-          </span>
+        <div className="sidebar-header">
           <button
-            className="mobile-close"
-            ref={mobileCloseRef}
+            className="sidebar-toggle"
             type="button"
-            aria-label="Close navigation"
-            onClick={() => {
-              setMobileSidebarOpen(false);
-              window.requestAnimationFrame(() => mobileMenuRef.current?.focus());
-            }}
-          >X</button>
+            aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
+            title={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
+            onClick={() => setSidebarCollapsed((current) => !current)}
+          >
+            <SidebarToggleIcon />
+          </button>
         </div>
         <nav className="primary-nav" aria-label="Main navigation">
           <button className={view === "dashboard" ? "nav-button active" : "nav-button"} type="button" title="Overview" disabled={submissionPending} onClick={() => openView("dashboard")}>
@@ -492,15 +512,37 @@ function App({ config }: { config: DeploymentConfig }) {
           ))}
         </div>
         {hideAccountPanel ? null : (
-          <div className="account-panel">
-            <span className="account-initial" aria-hidden="true">{(account.name ?? account.username).slice(0, 1).toUpperCase()}</span>
-            <span className="account-name nav-label" title={account.username}>{account.name ?? account.username}</span>
-            <button className="text-button nav-label" type="button" onClick={() => void signOut()}>Sign out</button>
+          <div className={accountMenuOpen ? "account-panel open" : "account-panel"} ref={accountMenuRef}>
+            <button
+              className="account-trigger"
+              type="button"
+              aria-expanded={accountMenuOpen}
+              aria-haspopup="menu"
+              onClick={() => setAccountMenuOpen((open) => !open)}
+            >
+              <span className="account-initial" aria-hidden="true">{(account.name ?? account.username).slice(0, 1).toUpperCase()}</span>
+              <span className="account-name nav-label" title={account.username}>{account.name ?? account.username}</span>
+              <svg className="account-chevron nav-label" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m9 18 6-6-6-6" />
+              </svg>
+            </button>
+            {accountMenuOpen ? (
+              <div className="account-popover" role="menu" aria-label="Account options">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setAccountMenuOpen(false);
+                    void signOut();
+                  }}
+                >
+                  <SignOutIcon />
+                  Sign out
+                </button>
+              </div>
+            ) : null}
           </div>
         )}
-        <button className={hideAccountPanel ? "sidebar-toggle account-hidden" : "sidebar-toggle"} type="button" title={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"} onClick={() => setSidebarCollapsed((current) => !current)}>
-          <span aria-hidden="true">{sidebarCollapsed ? ">" : "<"}</span><span className="nav-label">Collapse</span>
-        </button>
       </aside>
       <main className="main-content">
         <header className={view === "submit" ? "topbar settings-page-header" : "topbar"}>
@@ -541,6 +583,25 @@ function App({ config }: { config: DeploymentConfig }) {
         ) : null}
       </main>
     </div>
+  );
+}
+
+function SidebarToggleIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M9 3v18" />
+    </svg>
+  );
+}
+
+function SignOutIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m10 17 5-5-5-5" />
+      <path d="M15 12H3" />
+      <path d="M21 19V5a2 2 0 0 0-2-2h-6" />
+    </svg>
   );
 }
 
@@ -598,6 +659,7 @@ function Dashboard({
   const active = jobs.filter((job) => !isTerminalJob(job.status)).length;
   const failed = jobs.filter((job) => job.status === "failed").length;
   const recentJobs = jobs.slice(0, 5);
+  const primaryModule = modules[0];
 
   return (
     <div className="page-stack">
