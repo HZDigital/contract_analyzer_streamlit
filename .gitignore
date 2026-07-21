@@ -173,7 +173,8 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-.streamlit/
-
 input/
 invoice_results_table*.csv
+results/
+frontend/node_modules/
+frontend/dist/

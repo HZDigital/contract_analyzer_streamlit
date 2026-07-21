@@ -4,9 +4,10 @@ venv/
 __pycache__/
 .git/
 .github/
-.streamlit/
 .vscode/
 input/
 results/
 *.csv
 *.log
+frontend/node_modules/
+frontend/dist/

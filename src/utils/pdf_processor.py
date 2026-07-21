@@ -2,8 +2,8 @@
 PDF processing utilities for text extraction and OCR.
 """
 
-import tempfile
 import os
+import tempfile
 import fitz  # PyMuPDF
 import pytesseract
 from io import BytesIO
@@ -21,10 +21,11 @@ except ImportError:
 
 _deepseek_model = None
 _deepseek_tokenizer = None
+_deepseek_load_attempted = False
 
 
 def _read_uploaded_bytes(file: Union[BinaryIO, bytes]) -> Optional[bytes]:
-    """Read bytes from Streamlit uploads, file-like objects, or raw bytes."""
+    """Read bytes from file-like objects or raw bytes."""
     if isinstance(file, (bytes, bytearray)):
         return bytes(file)
     if hasattr(file, "getvalue") and callable(getattr(file, "getvalue")):
@@ -54,14 +55,10 @@ def extract_pdf_pages(file: Union[BinaryIO, bytes]) -> list[dict]:
     if not pdf_bytes:
         return [{"page": 0, "text": "[PDF Error: Empty upload]", "extraction_method": "error", "char_count": 0}]
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(pdf_bytes)
-        tmp_path = tmp.name
-
     doc = None
     pages = []
     try:
-        doc = fitz.open(tmp_path)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         for page_num, page in enumerate(doc, 1):
             page_text = page.get_text()
             extraction_method = "native"
@@ -95,8 +92,6 @@ def extract_pdf_pages(file: Union[BinaryIO, bytes]) -> list[dict]:
     finally:
         if doc is not None:
             doc.close()
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
 
     return pages
 
@@ -111,7 +106,7 @@ def extract_text_from_pdf(file: Union[BinaryIO, bytes]) -> str:
     Returns:
         str: Extracted text content
     """
-    # Obtain PDF bytes robustly (handles Streamlit UploadedFile)
+    # Obtain PDF bytes robustly from file-like inputs or raw bytes.
     try:
         pdf_bytes = _read_uploaded_bytes(file)
     except Exception as e:
@@ -121,14 +116,10 @@ def extract_text_from_pdf(file: Union[BinaryIO, bytes]) -> str:
         return "[PDF Error: Empty upload]"
     
 
-    # Save uploaded bytes to a temporary file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(pdf_bytes)
-        tmp_path = tmp.name
-
+    doc = None
     try:
         # Try native text extraction first, but OCR image-only pages in mixed PDFs.
-        doc = fitz.open(tmp_path)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         full_text = ""
         for page_num, page in enumerate(doc, 1):
             page_text = page.get_text()
@@ -137,35 +128,33 @@ def extract_text_from_pdf(file: Union[BinaryIO, bytes]) -> str:
                 full_text += ocr_text if ocr_text.strip() else page_text
             else:
                 full_text += page_text
-        doc.close()
-        
         # If no text was extracted, fallback to OCR
         if not full_text.strip():
-            full_text = _extract_text_with_ocr(tmp_path)
-    
+            full_text = _extract_text_with_ocr(pdf_bytes)
+    except fitz.FileDataError as error:
+        raise ValueError("The PDF could not be opened.") from error
     finally:
-        # Clean up temp file
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        if doc is not None:
+            doc.close()
 
     return full_text
 
 
-def _extract_text_with_ocr(pdf_path: str) -> str:
+def _extract_text_with_ocr(pdf_bytes: bytes) -> str:
     """
     Extract text using OCR when native extraction fails.
     Tries DeepSeek-OCR first (if available), falls back to Tesseract.
     Uses higher DPI (300) for better scanned document quality.
     
     Args:
-        pdf_path: Path to the PDF file
+        pdf_bytes: PDF content
         
     Returns:
         str: OCR extracted text
     """
     doc = None    
     try:
-        doc = fitz.open(pdf_path)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         ocr_text = ""
 
         for page_num, page in enumerate(doc, 1):
@@ -187,20 +176,29 @@ def _should_ocr_page(page, page_text: str) -> bool:
 
 
 def _load_deepseek_ocr_model():
-    """Load DeepSeek OCR with the fastest safe local configuration available."""
-    global _deepseek_model, _deepseek_tokenizer
+    """Load the baked DeepSeek model without attempting any network access."""
+    global _deepseek_model, _deepseek_tokenizer, _deepseek_load_attempted
 
     if _deepseek_model is not None and _deepseek_tokenizer is not None:
         return _deepseek_tokenizer, _deepseek_model
+    if _deepseek_load_attempted:
+        raise RuntimeError("DeepSeek OCR model is not available locally")
 
-    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+    _deepseek_load_attempted = True
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
     model_name = "deepseek-ai/DeepSeek-OCR"
-    _deepseek_tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    _deepseek_tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+        local_files_only=True,
+    )
 
     model_kwargs = {
         "trust_remote_code": True,
         "use_safetensors": True,
+        "local_files_only": True,
     }
 
     if torch.cuda.is_available():
@@ -230,17 +228,22 @@ def _load_deepseek_ocr_model():
 
 def _extract_text_from_page_with_ocr(page, page_num: int) -> str:
     """Extract text from one rendered PDF page using OCR."""
-    # Render at high DPI (300) for scanned documents.
-    mat = fitz.Matrix(300/72, 300/72)  # 300 DPI
-    pix = page.get_pixmap(matrix=mat)
-    image = Image.open(BytesIO(pix.tobytes("png")))
+    try:
+        # Render at high DPI (300) for scanned documents.
+        mat = fitz.Matrix(300 / 72, 300 / 72)
+        pix = page.get_pixmap(matrix=mat)
+        image = Image.open(BytesIO(pix.tobytes("png")))
+    except Exception:  # noqa: BLE001
+        # A damaged image stream must not prevent native text from other pages.
+        return ""
 
     if _transformers_available:
         temp_img_path = None
         try:
             tokenizer, model = _load_deepseek_ocr_model()
 
-            temp_img_path = os.path.join(tempfile.gettempdir(), f"temp_page_{page_num}.png")
+            with tempfile.NamedTemporaryFile(suffix=f"_{page_num}.png", delete=False) as image_file:
+                temp_img_path = image_file.name
             image.save(temp_img_path)
 
             prompt = "<image>\n<|grounding|>Convert the document to markdown. "
@@ -265,24 +268,6 @@ def _extract_text_from_page_with_ocr(page, page_num: int) -> str:
         return pytesseract.image_to_string(image).strip()
     except Exception:  # noqa: BLE001
         return ""
-
-def get_text_length_info(text: str) -> dict:
-    """
-    Get information about text length for processing decisions.
-    
-    Args:
-        text: Input text
-        
-    Returns:
-        dict: Text length information
-    """
-    length = len(text)
-    return {
-        "length": length,
-        "is_short": length < 3000,
-        "recommended_truncate": min(3500, length) if length >= 3000 else length
-    }
-
 
 def extract_text_from_docx(file: Union[BinaryIO, bytes]) -> str:
     """

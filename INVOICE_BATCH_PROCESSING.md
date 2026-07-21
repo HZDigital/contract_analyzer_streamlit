@@ -1,6 +1,6 @@
 # Invoice Batch Processing
 
-Use this for large invoice runs, for example 805 PDFs. It uses the same extraction logic as the Streamlit page, but writes the CSV after each file so the job can be resumed if it stops.
+Use this for large invoice runs, for example 805 PDFs. It uses the same extraction logic as the analyzer API, but writes the CSV after each file so the job can be resumed if it stops.
 
 ## Folder Setup
 
@@ -22,24 +22,6 @@ If scanned PDFs need OCR, Tesseract OCR must also be installed on the computer.
 
 ## Run The Batch
 
-Start the local UI instead:
-
-Windows:
-
-```bat
-run_invoice_batch_ui.bat
-```
-
-macOS/Linux:
-
-```bash
-./run_invoice_batch_ui.sh
-```
-
-The UI lets the user choose the input folder, output CSV, resume behavior, retries, and then downloads/previews the generated CSV.
-
-Command-line usage is still available.
-
 From the repository folder, run:
 
 ```bash
@@ -51,7 +33,7 @@ Default behavior:
 - Reads PDFs from `input/`.
 - Searches subfolders too.
 - Writes `invoice_results_table.csv` in the repository folder.
-- Uses `;` as the CSV separator, matching the Streamlit export.
+- Uses `;` as the CSV separator, matching the analyzer CSV export.
 - Skips files already present in the CSV, so the command can be run again to resume.
 
 ## Useful Commands

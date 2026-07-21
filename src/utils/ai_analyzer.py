@@ -3,8 +3,12 @@ AI analysis utilities using Azure OpenAI for contract processing.
 """
 
 import json
+import logging
 from typing import Dict, List, Any
-from config.settings import azure_config
+from src.api.settings import azure_config
+
+
+logger = logging.getLogger(__name__)
 
 
 def analyze_contract(text: str, truncate_length: int) -> Dict[str, Any]:
@@ -18,12 +22,6 @@ def analyze_contract(text: str, truncate_length: int) -> Dict[str, Any]:
     Returns:
         dict: Structured analysis results
     """
-    if not azure_config.client:
-        return {
-            "error": "❌ Azure OpenAI credentials not configured. "
-                    "Please set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT environment variables."
-        }
-
     prompt = f"""
 You are a legal assistant. Analyze the following contract and provide information in a structured JSON format.
 
@@ -63,34 +61,53 @@ Contract Text:
     """
 
     try:
-        response = azure_config.client.chat.completions.create(
+        client = azure_config.client
+    except Exception as error:  # noqa: BLE001
+        logger.warning("Azure OpenAI client initialization failed: error_type=%s", type(error).__name__)
+        return _contract_analysis_failure("client_initialization_failed")
+
+    if not client:
+        logger.warning("Azure OpenAI client is unavailable: error_type=ConfigurationMissing")
+        return _contract_analysis_failure("configuration_missing")
+
+    try:
+        response = client.chat.completions.create(
             model=azure_config.deployment_name,
             messages=[{"role": "user", "content": prompt}],
-            temperature=1  # Lower temperature for more consistent extraction
+            temperature=1,  # Lower temperature for more consistent extraction
         )
-        
+    except Exception as error:  # noqa: BLE001
+        logger.warning("Azure OpenAI completion failed: error_type=%s", type(error).__name__)
+        return _contract_analysis_failure("request_failed")
+
+    try:
         response_text = response.choices[0].message.content.strip()
-        
+
         # Clean up response to extract JSON if it's wrapped in markdown
         if "```json" in response_text:
             response_text = response_text.split("```json")[1].split("```")[0].strip()
         elif "```" in response_text:
             response_text = response_text.split("```")[1].strip()
-            
+
         return json.loads(response_text)
-    except Exception as e:
-        # Fallback if JSON parsing fails
-        return {
-            "error": f"❌ Error analyzing contract: {str(e)}",
-            "summary": "Analysis failed",
-            "client_name": "Unknown",
-            "contract_type": "Unknown",
-            "start_date": "Not specified",
-            "end_date": "Not specified",
-            "products_services": [],
-            "key_clauses": [],
-            "risk_areas": []
-        }
+    except Exception as error:  # noqa: BLE001
+        logger.warning("Azure OpenAI completion response was invalid: error_type=%s", type(error).__name__)
+        return _contract_analysis_failure("response_invalid")
+
+
+def _contract_analysis_failure(code: str) -> Dict[str, Any]:
+    """Return a stable result without persisting provider diagnostics."""
+    return {
+        "error": code,
+        "summary": "Analysis failed",
+        "client_name": "Unknown",
+        "contract_type": "Unknown",
+        "start_date": "Not specified",
+        "end_date": "Not specified",
+        "products_services": [],
+        "key_clauses": [],
+        "risk_areas": [],
+    }
 
 
 def extract_client_and_products(text: str) -> Dict[str, Any]:
@@ -426,6 +443,81 @@ Only return the JSON, no other text."""
         
     except Exception as e:
         return {"error": str(e), "groups": []}
+
+
+def compare_factory_documents(file_texts: Dict[str, str]) -> Dict[str, Any]:
+    """Identify specifications and certificates, then compare their measurements."""
+    if not azure_config.client:
+        return {
+            "error": "Azure OpenAI credentials not configured",
+            "identified_specs": [],
+            "identified_certificates": [],
+            "comparisons": [],
+            "summary": "",
+        }
+
+    files_context = "".join(
+        f"\n\n=== DOCUMENT {index}: {filename} ===\n{text[:8000]}"
+        for index, (filename, text) in enumerate(file_texts.items(), 1)
+    )
+    prompt = f"""
+You are analyzing technical specifications and factory test certificates.
+
+For every supplied document:
+1. Identify whether it is a specification or certificate/test report.
+2. Extract specification tolerances and certificate measurements.
+3. Compare measurements against matching specifications.
+
+Return ONLY valid JSON with this exact shape:
+{{
+  "identified_specs": ["specification filenames"],
+  "identified_certificates": ["certificate filenames"],
+  "comparisons": [
+    {{
+      "parameter": "parameter name",
+      "unit": "unit",
+      "spec_min": null,
+      "spec_max": null,
+      "spec_nominal": null,
+      "measured_value": null,
+      "measured_from": "certificate filename",
+      "status": "OK|OUT|MISSING|NO_SPEC",
+      "deviation": "description"
+    }}
+  ],
+  "summary": "brief summary"
+}}
+
+Documents:
+{files_context}
+"""
+    try:
+        response = azure_config.client.chat.completions.create(
+            model=azure_config.deployment_name,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        response_text = response.choices[0].message.content.strip()
+        if "```json" in response_text:
+            response_text = response_text.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif "```" in response_text:
+            response_text = response_text.split("```", 1)[1].split("```", 1)[0].strip()
+
+        data = json.loads(response_text)
+        if not isinstance(data, dict):
+            raise ValueError("Factory comparison response was not a JSON object")
+        data.setdefault("identified_specs", [])
+        data.setdefault("identified_certificates", [])
+        data.setdefault("comparisons", [])
+        data.setdefault("summary", "")
+        return data
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "error": str(exc),
+            "identified_specs": [],
+            "identified_certificates": [],
+            "comparisons": [],
+            "summary": "",
+        }
 
 
 # ------------------------------

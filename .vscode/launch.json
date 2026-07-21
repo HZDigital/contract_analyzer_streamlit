@@ -1,21 +1,24 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
         {
-            "name": "Python Debugger: Streamlit App",
+            "name": "Python Debugger: Contract Analyzer API",
             "type": "debugpy",
             "request": "launch",
-            "module": "streamlit",
+            "module": "uvicorn",
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}/src",
+            "cwd": "${workspaceFolder}",
             "args": [
-                "run",
-                "contract_analyzer_app.py"
-            ]
+                "src.api.main:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8080",
+                "--reload"
+            ],
+            "env": {
+                "PORT": "8080"
+            }
         }
     ]
 }

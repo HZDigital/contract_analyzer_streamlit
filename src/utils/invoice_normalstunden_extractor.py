@@ -4,16 +4,12 @@ Utilities to extract Normalstunden information from invoices using PDF text + AI
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
-import re
 
-try:
-    from utils.ai_analyzer import extract_client_and_products_from_invoices
-    from utils.pdf_processor import extract_text_from_pdf
-except ModuleNotFoundError:
-    from src.utils.ai_analyzer import extract_client_and_products_from_invoices
-    from src.utils.pdf_processor import extract_text_from_pdf
+from src.utils.ai_analyzer import extract_client_and_products_from_invoices
+from src.utils.pdf_processor import extract_text_from_pdf
 
 MAX_HOURLY_RATE = 1200000000000.0
 MIN_HOURLY_RATE = 1.0
@@ -39,19 +35,63 @@ def list_pdf_files(input_dir: Path, recursive: bool = True) -> list[Path]:
 
 def extract_normalstunden_from_pdf(pdf_path: Path) -> dict[str, Any]:
     """Extract supplier, hours total, and hourly rate(s) from a single invoice PDF."""
-    text = extract_text_from_pdf(pdf_path.read_bytes())
-    parsed = extract_client_and_products_from_invoices(text) if text.strip() else {}
+    result = extract_normalstunden_from_bytes(
+        pdf_path.read_bytes(),
+        pdf_path.name,
+        supplier_hint=pdf_path.parent.name,
+    )
+    result["file_path"] = str(pdf_path)
+    return result
 
-    folder_supplier = pdf_path.parent.name
-    supplier = _resolve_supplier(parsed, folder_supplier)
+
+def extract_normalstunden_from_bytes(
+    pdf_bytes: bytes,
+    filename: str,
+    supplier_hint: str = "",
+) -> dict[str, Any]:
+    """Extract Normalstunden from browser-uploaded PDF bytes without filesystem access."""
+    text = extract_text_from_pdf(pdf_bytes)
+    return extract_normalstunden_from_text(text, filename, supplier_hint)
+
+
+def extract_normalstunden_from_text(
+    text: str,
+    filename: str,
+    supplier_hint: str = "",
+) -> dict[str, Any]:
+    """Extract Normalstunden from text that has already been read from a PDF."""
+    if not text.strip():
+        return {
+            "file_name": filename,
+            "supplier": supplier_hint,
+            "hours_total": None,
+            "hourly_rates": [],
+            "entries": [],
+            "status": "failed",
+            "error": "No readable text was found in this invoice.",
+        }
+    parsed = extract_client_and_products_from_invoices(text)
+
+    if isinstance(parsed, dict) and parsed.get("error"):
+        return {
+            "file_name": filename,
+            "supplier": supplier_hint,
+            "hours_total": None,
+            "hourly_rates": [],
+            "entries": [],
+            "status": "failed",
+            "error": "This invoice could not be analyzed. Review the source document and try again.",
+        }
+
+    supplier = _resolve_supplier(parsed, supplier_hint)
     entries = _extract_ai_normalstunden_entries(parsed)
 
     if not entries:
         return {
-            "file_name": pdf_path.name,
-            "file_path": str(pdf_path),
+            "file_name": filename,
+            "file_path": "",
             "supplier": supplier,
-            "supplier_folder": folder_supplier,
+            "supplier_folder": supplier_hint,
             "hours_total": None,
             "hourly_rates": [],
             "hourly_rate_display": "",
@@ -65,10 +105,10 @@ def extract_normalstunden_from_pdf(pdf_path: Path) -> dict[str, Any]:
     hourly_rate_display = " | ".join(_format_german_number(rate) for rate in unique_rates)
 
     return {
-        "file_name": pdf_path.name,
-        "file_path": str(pdf_path),
+        "file_name": filename,
+        "file_path": "",
         "supplier": supplier,
-        "supplier_folder": folder_supplier,
+        "supplier_folder": supplier_hint,
         "hours_total": total_hours,
         "hourly_rates": unique_rates,
         "hourly_rate_display": hourly_rate_display,

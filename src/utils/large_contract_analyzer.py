@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional
 
-from config.settings import azure_config
+from src.api.settings import azure_config
 
 
 CONTRACT_SCANNER_SYSTEM_PROMPT = """
@@ -186,12 +186,12 @@ Contract chunk text:
         payload["page_start"] = chunk.get("page_start")
         payload["page_end"] = chunk.get("page_end")
         return payload
-    except Exception as e:
+    except Exception:
         return {
             "chunk_id": chunk.get("chunk_id"),
             "page_start": chunk.get("page_start"),
             "page_end": chunk.get("page_end"),
-            "error": str(e),
+            "error": "Section analysis unavailable.",
             "findings": [],
             "red_flags": [],
             "cross_reference_gaps": [],
@@ -202,7 +202,7 @@ def analyze_contract_chunks(
     chunks: List[Dict[str, Any]],
     progress_callback: Optional[Callable[[int, int, Dict[str, Any]], None]] = None,
 ) -> List[Dict[str, Any]]:
-    """Analyze chunks sequentially so Streamlit can show deterministic progress."""
+    """Analyze chunks sequentially so callers receive deterministic progress."""
     results = []
     total = len(chunks)
     for index, chunk in enumerate(chunks, 1):
@@ -268,7 +268,7 @@ def merge_chunk_findings(chunk_results: List[Dict[str, Any]], chunks: List[Dict[
 def synthesize_contract_analysis(merged: Dict[str, Any], is_complete_document: bool = True) -> str:
     """Create final Contract Scanner markdown report from merged evidence."""
     if not azure_config.client:
-        return "Azure OpenAI credentials not configured. Set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT."
+        return "A final narrative could not be generated. Review the structured findings below."
 
     compact_evidence = _limit_json_chars(merged, max_chars=90000)
     completeness_note = "Complete uploaded document was processed." if is_complete_document else "Only selected/partial text was processed; never assume unseen content."
@@ -323,8 +323,8 @@ Additional rules:
             temperature=1,
         )
         return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"[Final synthesis error: {e}]"
+    except Exception:
+        return "A final narrative could not be generated. Review the structured findings below."
 
 
 def answer_contract_question(
@@ -335,7 +335,7 @@ def answer_contract_question(
 ) -> str:
     """Answer grounded follow-up questions using keyword-selected chunks and merged evidence."""
     if not azure_config.client:
-        return "Azure OpenAI credentials not configured."
+        return "Question answering is currently unavailable."
 
     context = _build_question_context(question, chunks, merged, max_context_chars=max_context_chars)
     prompt = f"""
@@ -365,8 +365,8 @@ Rules:
             temperature=1,
         )
         return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"[Question answering error: {e}]"
+    except Exception:
+        return "The analysis service could not answer this question. Please try again."
 
 
 def _make_chunk(existing_chunks: List[Dict[str, Any]], pages: List[Dict[str, Any]], source_file: str) -> Dict[str, Any]:

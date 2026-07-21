@@ -1,8 +1,8 @@
 """Batch-process invoice PDFs from a local folder into a CSV file.
 
-This script reuses the same PDF extraction and Azure OpenAI invoice extraction
-logic used by the Streamlit "Invoice Request Detection" page, but writes each
-result incrementally so large batches can be resumed safely.
+This script reuses the API's PDF extraction and Azure OpenAI invoice extraction
+logic, but writes each result incrementally so large batches can be resumed
+safely.
 """
 
 from __future__ import annotations
@@ -16,12 +16,11 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = REPO_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-from utils.ai_analyzer import extract_client_and_products_from_invoices  # noqa: E402
-from utils.pdf_processor import extract_text_from_pdf  # noqa: E402
+from src.utils.ai_analyzer import extract_client_and_products_from_invoices  # noqa: E402
+from src.utils.pdf_processor import extract_text_from_pdf  # noqa: E402
 
 
 CSV_COLUMNS = [

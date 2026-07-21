@@ -2,12 +2,15 @@
 Web research utilities using SearXNG for market intelligence.
 """
 
-import os
 import requests
 import json
+import logging
 import time
 from typing import Dict, List, Any
-from config.settings import azure_config
+from src.api.settings import azure_config, get_settings
+
+
+logger = logging.getLogger(__name__)
 
 
 def search_market_info(query: str, max_results: int = 5) -> List[Dict[str, str]]:
@@ -21,10 +24,12 @@ def search_market_info(query: str, max_results: int = 5) -> List[Dict[str, str]]
     Returns:
         List of search results with title, url, and content
     """
-    searxng_url = os.getenv("SEARXNG_URL", "https://searxng.orangeisland-6e1300af.germanywestcentral.azurecontainerapps.io")
-    
+    settings = get_settings()
+    searxng_url = settings.searxng_url
     if not searxng_url:
         return [{"error": "SearXNG URL not configured"}]
+
+    bounded_results = min(max(1, int(max_results)), settings.searxng_max_results)
     
     try:
         params = {
@@ -35,11 +40,15 @@ def search_market_info(query: str, max_results: int = 5) -> List[Dict[str, str]]
             "time_range": "year"  # Focus on recent information
         }
         
-        response = requests.get(f"{searxng_url}/search", params=params, timeout=30)
+        response = requests.get(
+            f"{searxng_url.rstrip('/')}/search",
+            params=params,
+            timeout=settings.searxng_timeout_seconds,
+        )
         response.raise_for_status()
         
         data = response.json()
-        results = data.get("results", [])[:max_results]
+        results = data.get("results", [])[:bounded_results]
         
         return [
             {
@@ -49,8 +58,9 @@ def search_market_info(query: str, max_results: int = 5) -> List[Dict[str, str]]
             }
             for r in results
         ]
-    except Exception as e:
-        return [{"error": f"Search failed: {str(e)}"}]
+    except Exception as exc:
+        logger.warning("Tender market search failed: error_type=%s", type(exc).__name__)
+        return [{"error": "Search unavailable"}]
 
 
 def analyze_market_situation(customer: str, project_title: str, country: str, ai_client=None) -> Dict[str, Any]:
@@ -64,14 +74,13 @@ def analyze_market_situation(customer: str, project_title: str, country: str, ai
         ai_client: Azure OpenAI client (optional, used for synthesis)
         
     Returns:
-        Market situation data with competitors, last tender info, split potential, and win chances
+        Market situation data with competitors, last tender information, and split potential
     """
     if not customer and not project_title:
         return {
             "Vermutliche Wettbewerber": "Nicht ermittelt",
             "Letzter Tender": "Nicht ermittelt",
             "Split möglich": "Nicht ermittelt",
-            "Chancen in %": "Nicht ermittelt",
             "sources": []
         }
     
@@ -99,7 +108,6 @@ def analyze_market_situation(customer: str, project_title: str, country: str, ai
             "Vermutliche Wettbewerber": "Keine Web-Recherche verfügbar",
             "Letzter Tender": "Keine Web-Recherche verfügbar",
             "Split möglich": "Keine Web-Recherche verfügbar",
-            "Chancen in %": "Keine Web-Recherche verfügbar",
             "sources": sources
         }
     
@@ -122,8 +130,7 @@ Erstelle ein JSON-Objekt mit diesen EXAKT benannten Feldern:
 {{
     "Vermutliche Wettbewerber": "Kommagetrennte Liste von möglichen Konkurrenten (2-5 Namen) oder 'Nicht ermittelt'",
     "Letzter Tender": "Info zu letztem ähnlichen Tender bei diesem Kunden: wer hat gewonnen, was war der ungefähre Preis/Wert (z.B. '2023: Unternehmen XY, ~€500k') oder 'Nicht ermittelt'",
-    "Split möglich": "Ja, Nein, oder Unklar - ob die Leistung unter mehreren Anbietern aufgeteilt werden könnte",
-    "Chancen in %": "Prozentuale Gewinnchance basierend auf Marktlage (z.B. '35%' oder 'Unklar')"
+    "Split möglich": "Ja, Nein, oder Unklar - ob die Leistung unter mehreren Anbietern aufgeteilt werden könnte"
 }}
 
 Regel: Verwende "Nicht ermittelt" wenn die Information nicht in den Suchergebnissen vorhanden ist.
@@ -157,14 +164,12 @@ Regel: Verwende "Nicht ermittelt" wenn die Information nicht in den Suchergebnis
             elif "```" in response_text:
                 response_text = response_text.split("```")[1].strip()
             
-            import json
             analysis = json.loads(response_text)
             
             # Ensure required fields exist
             analysis.setdefault("Vermutliche Wettbewerber", "Nicht ermittelt")
             analysis.setdefault("Letzter Tender", "Nicht ermittelt")
             analysis.setdefault("Split möglich", "Unklar")
-            analysis.setdefault("Chancen in %", "Unklar")
             analysis["sources"] = sources
             
             return analysis
@@ -174,15 +179,13 @@ Regel: Verwende "Nicht ermittelt" wenn die Information nicht in den Suchergebnis
                 "Vermutliche Wettbewerber": "Nicht ermittelt",
                 "Letzter Tender": "Nicht ermittelt",
                 "Split möglich": "Unklar",
-                "Chancen in %": "Unklar",
                 "sources": sources
             }
         
-    except Exception as e:
+    except Exception:
         return {
-            "Vermutliche Wettbewerber": "Fehler bei Analyse",
-            "Letzter Tender": f"Fehler: {str(e)[:50]}",
+            "Vermutliche Wettbewerber": "Nicht ermittelt",
+            "Letzter Tender": "Nicht ermittelt",
             "Split möglich": "Unklar",
-            "Chancen in %": "Unklar",
             "sources": sources
         }
