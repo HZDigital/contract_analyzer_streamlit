@@ -24,11 +24,7 @@ FROM python:3.13-slim-bookworm AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/app \
-    HF_HOME=/opt/huggingface \
-    TRANSFORMERS_CACHE=/opt/huggingface \
-    HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1
+    PYTHONPATH=/app
 
 WORKDIR /app
 
@@ -41,13 +37,9 @@ RUN apt-get update \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Cache the primary OCR model during the image build. Runtime is explicitly offline.
-RUN mkdir -p "${HF_HOME}" \
-    && HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='deepseek-ai/DeepSeek-OCR', cache_dir='/opt/huggingface')"
-
 RUN groupadd --system app \
     && useradd --system --gid app --home-dir /app --create-home app \
-    && chown -R app:app /app "${HF_HOME}"
+    && chown -R app:app /app
 
 COPY --chown=app:app src/ ./src/
 COPY --chown=app:app --from=frontend-builder /app/frontend/dist/ ./frontend/dist/

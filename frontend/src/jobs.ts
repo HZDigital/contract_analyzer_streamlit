@@ -1,4 +1,4 @@
-import type { AnalyzerJob, CustomOutputType, JobArtifact, JobCustomization, JobSource } from "./types";
+import type { AnalyzerJob, CustomOutputType, JobArtifact, JobCustomization, JobProgressEvent, JobSource } from "./types";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -102,6 +102,24 @@ function normalizeSources(value: unknown): JobSource[] {
   });
 }
 
+function normalizeProgressLog(value: unknown): JobProgressEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const at = asString(entry.at);
+    const progress = asNumber(entry.progress);
+    const message = asString(entry.message);
+    if (!at || progress === undefined || !message) {
+      return [];
+    }
+    return [{ at, progress: Math.max(0, Math.min(100, progress)), message }];
+  });
+}
+
 function normalizeCustomization(value: unknown): JobCustomization | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -162,6 +180,7 @@ export function normalizeJob(value: unknown): AnalyzerJob | undefined {
     completedAt: asString(value.completedAt ?? value.completed_at ?? value.finishedAt),
     progress: asNumber(nestedProgress?.percent ?? nestedProgress?.value ?? value.progress),
     message: asString(value.message ?? value.statusMessage ?? nestedProgress?.message),
+    progressLog: normalizeProgressLog(value.progressLog ?? value.progress_log),
     error: asString(value.errorMessage ?? nestedError?.message ?? value.error),
     retention,
     retentionDays: asNumber(value.retentionDays ?? value.retention_days),

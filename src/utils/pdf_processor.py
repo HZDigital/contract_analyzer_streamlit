@@ -2,26 +2,23 @@
 PDF processing utilities for text extraction and OCR.
 """
 
-import os
-import tempfile
+import base64
+import logging
+
 import fitz  # PyMuPDF
+import httpx
 import pytesseract
 from io import BytesIO
 from PIL import Image
-from datetime import datetime
 from typing import BinaryIO, Optional, Union
 
-# Optional: DeepSeek-OCR via transformers (local model, no API key needed)
-try:
-    from transformers import AutoModel, AutoTokenizer
-    import torch
-    _transformers_available = True
-except ImportError:
-    _transformers_available = False
+from src.api.settings import get_settings
 
-_deepseek_model = None
-_deepseek_tokenizer = None
-_deepseek_load_attempted = False
+
+logger = logging.getLogger(__name__)
+
+MIN_OCR_IMAGE_COVERAGE = 0.5
+MIN_NATIVE_TEXT_CHARACTERS = 120
 
 
 def _read_uploaded_bytes(file: Union[BinaryIO, bytes]) -> Optional[bytes]:
@@ -80,7 +77,12 @@ def extract_pdf_pages(file: Union[BinaryIO, bytes]) -> list[dict]:
         if not any(page["text"].strip() for page in pages):
             pages = []
             for page_num, page in enumerate(doc, 1):
-                page_text = _extract_text_from_page_with_ocr(page, page_num)
+                native_text = page.get_text()
+                page_text = _extract_text_from_page_with_ocr(
+                    page,
+                    page_num,
+                    use_mistral=_should_ocr_page(page, native_text),
+                )
                 pages.append({
                     "page": page_num,
                     "text": page_text,
@@ -143,7 +145,7 @@ def extract_text_from_pdf(file: Union[BinaryIO, bytes]) -> str:
 def _extract_text_with_ocr(pdf_bytes: bytes) -> str:
     """
     Extract text using OCR when native extraction fails.
-    Tries DeepSeek-OCR first (if available), falls back to Tesseract.
+    Tries Mistral Document AI first (if configured), falls back to Tesseract.
     Uses higher DPI (300) for better scanned document quality.
     
     Args:
@@ -158,7 +160,12 @@ def _extract_text_with_ocr(pdf_bytes: bytes) -> str:
         ocr_text = ""
 
         for page_num, page in enumerate(doc, 1):
-            page_text = _extract_text_from_page_with_ocr(page, page_num)
+            native_text = page.get_text()
+            page_text = _extract_text_from_page_with_ocr(
+                page,
+                page_num,
+                use_mistral=_should_ocr_page(page, native_text),
+            )
             if page_text:
                 ocr_text += page_text + "\n"
 
@@ -171,62 +178,84 @@ def _extract_text_with_ocr(pdf_bytes: bytes) -> str:
 
 
 def _should_ocr_page(page, page_text: str) -> bool:
-    """OCR pages that are mostly image content with no useful text layer."""
-    return bool(page.get_images(full=True)) and len(page_text.strip()) < 30
+    """OCR image-dominated pages that lack a useful native text layer."""
+    images = page.get_images(full=True)
+    if not images:
+        return False
 
-
-def _load_deepseek_ocr_model():
-    """Load the baked DeepSeek model without attempting any network access."""
-    global _deepseek_model, _deepseek_tokenizer, _deepseek_load_attempted
-
-    if _deepseek_model is not None and _deepseek_tokenizer is not None:
-        return _deepseek_tokenizer, _deepseek_model
-    if _deepseek_load_attempted:
-        raise RuntimeError("DeepSeek OCR model is not available locally")
-
-    _deepseek_load_attempted = True
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
-
-    model_name = "deepseek-ai/DeepSeek-OCR"
-    _deepseek_tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        local_files_only=True,
-    )
-
-    model_kwargs = {
-        "trust_remote_code": True,
-        "use_safetensors": True,
-        "local_files_only": True,
-    }
-
-    if torch.cuda.is_available():
-        model_kwargs["torch_dtype"] = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        try:
-            _deepseek_model = AutoModel.from_pretrained(
-                model_name,
-                _attn_implementation="flash_attention_2",
-                **model_kwargs,
-            ).cuda()
-        except Exception:  # noqa: BLE001
-            _deepseek_model = AutoModel.from_pretrained(
-                model_name,
-                device_map="auto",
-                **model_kwargs,
-            )
-    else:
-        _deepseek_model = AutoModel.from_pretrained(
-            model_name,
-            device_map="auto",
-            **model_kwargs,
+    try:
+        page_area = page.rect.get_area()
+        image_area = sum(
+            rect.get_area()
+            for image in images
+            for rect in page.get_image_rects(image[0])
         )
+    except Exception:  # noqa: BLE001
+        # Avoid sending pages to the hosted provider when their image coverage
+        # cannot be established.
+        return False
 
-    _deepseek_model = _deepseek_model.eval()
-    return _deepseek_tokenizer, _deepseek_model
+    if not page_area or min(image_area / page_area, 1) < MIN_OCR_IMAGE_COVERAGE:
+        return False
+
+    return len(page_text.strip()) < MIN_NATIVE_TEXT_CHARACTERS
 
 
-def _extract_text_from_page_with_ocr(page, page_num: int) -> str:
+def _mistral_document_ai_url(endpoint: str) -> str:
+    """Normalize the Azure Foundry endpoint to Mistral's OCR route."""
+    normalized = endpoint.rstrip("/")
+    if normalized.endswith("/v1/ocr"):
+        return normalized
+    if normalized.endswith("/v1"):
+        return f"{normalized}/ocr"
+    return f"{normalized}/v1/ocr"
+
+
+def _extract_text_with_mistral_document_ai(image: Image.Image) -> str:
+    """Return Markdown from Azure Mistral Document AI, or an empty fallback value."""
+    settings = get_settings()
+    if not settings.mistral_document_ai_configured:
+        return ""
+
+    endpoint = settings.azure_mistral_document_ai_endpoint
+    api_key = settings.azure_mistral_document_ai_api_key
+    if not endpoint or not api_key:
+        return ""
+
+    try:
+        image_buffer = BytesIO()
+        image.save(image_buffer, format="PNG")
+        image_data = base64.b64encode(image_buffer.getvalue()).decode("ascii")
+        payload = {
+            "model": settings.azure_mistral_document_ai_model,
+            "document": {
+                "type": "image_url",
+                "image_url": f"data:image/png;base64,{image_data}",
+            },
+        }
+        response = httpx.post(
+            _mistral_document_ai_url(endpoint),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=settings.azure_mistral_document_ai_timeout_seconds,
+        )
+        response.raise_for_status()
+        response_body = response.json()
+        pages = response_body.get("pages") if isinstance(response_body, dict) else None
+        if not isinstance(pages, list) or not pages:
+            return ""
+        markdown = pages[0].get("markdown") if isinstance(pages[0], dict) else None
+        return markdown.strip() if isinstance(markdown, str) else ""
+    except (httpx.HTTPError, ValueError, TypeError):
+        # Provider failures must not expose their response to browser users.
+        logger.warning("Mistral Document AI OCR request failed; falling back to Tesseract")
+        return ""
+
+
+def _extract_text_from_page_with_ocr(page, page_num: int, *, use_mistral: bool = True) -> str:
     """Extract text from one rendered PDF page using OCR."""
     try:
         # Render at high DPI (300) for scanned documents.
@@ -237,37 +266,15 @@ def _extract_text_from_page_with_ocr(page, page_num: int) -> str:
         # A damaged image stream must not prevent native text from other pages.
         return ""
 
-    if _transformers_available:
-        temp_img_path = None
-        try:
-            tokenizer, model = _load_deepseek_ocr_model()
-
-            with tempfile.NamedTemporaryFile(suffix=f"_{page_num}.png", delete=False) as image_file:
-                temp_img_path = image_file.name
-            image.save(temp_img_path)
-
-            prompt = "<image>\n<|grounding|>Convert the document to markdown. "
-            result = model.infer(
-                tokenizer,
-                prompt=prompt,
-                image_file=temp_img_path,
-                base_size=1024,
-                image_size=640,
-                crop_mode=True
-            )
-
-            if result:
-                return str(result).strip()
-        except Exception:  # noqa: BLE001
-            pass  # Fall back to Tesseract
-        finally:
-            if temp_img_path and os.path.exists(temp_img_path):
-                os.remove(temp_img_path)
+    mistral_text = _extract_text_with_mistral_document_ai(image) if use_mistral else ""
+    if mistral_text:
+        return mistral_text
 
     try:
         return pytesseract.image_to_string(image).strip()
     except Exception:  # noqa: BLE001
         return ""
+
 
 def extract_text_from_docx(file: Union[BinaryIO, bytes]) -> str:
     """

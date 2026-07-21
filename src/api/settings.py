@@ -39,6 +39,25 @@ class Settings(BaseSettings):
     azure_openai_deployment: str = Field(default="o4-mini", validation_alias="AZURE_OPENAI_DEPLOYMENT")
     azure_openai_api_version: str = Field(default="2024-12-01-preview", validation_alias="AZURE_OPENAI_API_VERSION")
 
+    azure_mistral_document_ai_endpoint: Optional[str] = Field(
+        default=None,
+        validation_alias="AZURE_MISTRAL_DOCUMENT_AI_ENDPOINT",
+    )
+    azure_mistral_document_ai_api_key: Optional[str] = Field(
+        default=None,
+        validation_alias="AZURE_MISTRAL_DOCUMENT_AI_API_KEY",
+    )
+    azure_mistral_document_ai_model: str = Field(
+        default="mistral-document-ai-2512",
+        validation_alias="AZURE_MISTRAL_DOCUMENT_AI_MODEL",
+    )
+    azure_mistral_document_ai_timeout_seconds: int = Field(
+        default=90,
+        ge=5,
+        le=300,
+        validation_alias="AZURE_MISTRAL_DOCUMENT_AI_TIMEOUT_SECONDS",
+    )
+
     searxng_url: Optional[str] = Field(default=None, validation_alias="SEARXNG_URL")
     searxng_timeout_seconds: int = Field(default=20, ge=1, le=120)
     searxng_max_results: int = Field(default=10, ge=1, le=20)
@@ -61,6 +80,10 @@ class Settings(BaseSettings):
     @property
     def auth_configured(self) -> bool:
         return bool(self.entra_api_audience)
+
+    @property
+    def mistral_document_ai_configured(self) -> bool:
+        return bool(self.azure_mistral_document_ai_endpoint and self.azure_mistral_document_ai_api_key)
 
     @property
     def allowed_tenant_ids(self) -> frozenset[str]:

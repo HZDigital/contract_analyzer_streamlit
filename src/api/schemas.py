@@ -16,6 +16,9 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+MAX_PROGRESS_LOG_ENTRIES = 100
+
+
 class CurrentUser(BaseModel):
     oid: str
     subject: str
@@ -77,6 +80,19 @@ class JobSource(BaseModel):
         }
 
 
+class JobProgressEvent(BaseModel):
+    at: datetime = Field(default_factory=utc_now)
+    progress: int = Field(ge=0, le=100)
+    message: str = Field(min_length=1, max_length=240)
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "at": self.at.isoformat(),
+            "progress": self.progress,
+            "message": self.message,
+        }
+
+
 class JobRecord(BaseModel):
     """Durable manifest. Input/blob locations are never returned to the browser."""
 
@@ -90,6 +106,7 @@ class JobRecord(BaseModel):
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
     progress: int = Field(default=0, ge=0, le=100)
     message: str = "Queued"
+    progress_log: list[JobProgressEvent] = Field(default_factory=list, alias="progressLog")
     error: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now, alias="createdAt")
     updated_at: datetime = Field(default_factory=utc_now, alias="updatedAt")
@@ -105,6 +122,19 @@ class JobRecord(BaseModel):
     context_staged: bool = Field(default=False, alias="contextStaged")
     finalization_ready: bool = Field(default=False, alias="finalizationReady")
     attempt: int = 0
+
+    def record_progress(self, progress: int, message: str) -> None:
+        """Update the public status and retain a bounded, curated activity history."""
+
+        self.progress = max(self.progress, min(100, int(progress)))
+        self.message = message.strip()[:240] or "Updating analysis"
+        if self.progress_log and (
+            self.progress_log[-1].progress == self.progress and self.progress_log[-1].message == self.message
+        ):
+            return
+        self.progress_log.append(JobProgressEvent(progress=self.progress, message=self.message))
+        if len(self.progress_log) > MAX_PROGRESS_LOG_ENTRIES:
+            del self.progress_log[:-MAX_PROGRESS_LOG_ENTRIES]
 
     def summary_public(self) -> dict[str, Any]:
         """Small list payload without completed analysis content or download selectors."""
@@ -136,6 +166,7 @@ class JobRecord(BaseModel):
             "completedAt": self.completed_at.isoformat() if self.completed_at else None,
             "progress": self.progress,
             "message": self.message,
+            "progressLog": [event.public() for event in self.progress_log],
             "error": (
                 "Analysis could not be completed. Review the source documents and try again."
                 if self.error

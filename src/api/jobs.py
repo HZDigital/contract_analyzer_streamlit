@@ -82,6 +82,7 @@ class JobService:
             file_roles=[FileRole(role=upload.role, name=upload.name) for upload in uploads],
             options=options,
         )
+        job.record_progress(0, "Queued")
         try:
             return self.storage.create_job(job, uploads)
         except StorageNotConfiguredError as exc:
@@ -248,16 +249,14 @@ class JobDispatcher:
 
             job.status = "running"
             job.started_at = job.started_at or now
-            job.progress = max(job.progress, 1)
-            job.message = "Preparing analysis"
+            job.record_progress(1, "Preparing analysis")
             job.error = None
             job.attempt += 1
             self.storage.save_job(job, lease_id=lease.lease_id)
             heartbeat.start()
 
             def update_progress(progress: int, message: str) -> None:
-                job.progress = max(job.progress, min(99, int(progress)))
-                job.message = message[:240]
+                job.record_progress(min(99, int(progress)), message)
                 try:
                     self.storage.save_job(job, lease_id=lease.lease_id)
                 except Exception as exc:  # noqa: BLE001
@@ -265,10 +264,14 @@ class JobDispatcher:
 
             if job.finalization_ready:
                 retained_sources = list(job.sources)
+                job.record_progress(job.progress, "Resuming analysis finalization")
+                self.storage.save_job(job, lease_id=lease.lease_id)
                 logger.info("Recovering analyzer job from finalization checkpoint: %s", job.id)
             else:
                 try:
                     outcome = self.storage.load_outcome(job)
+                    job.record_progress(job.progress, "Resuming analysis finalization")
+                    self.storage.save_job(job, lease_id=lease.lease_id)
                     logger.info("Recovering analyzer job from workflow checkpoint: %s", job.id)
                 except JobNotFoundError:
                     loaded_inputs = self.storage.load_inputs(job)
@@ -354,7 +357,7 @@ class JobDispatcher:
                     # projection can retain custom tender fields safely.
                     job.result["_display_fields"] = display_fields
                 job.finalization_ready = True
-                job.message = "Finalizing analysis"
+                job.record_progress(job.progress, "Finalizing analysis")
                 # This private running manifest references every staged source
                 # and output. It remains sufficient after the outcome expires.
                 self.storage.save_job(job, lease_id=lease.lease_id)
@@ -363,8 +366,7 @@ class JobDispatcher:
             if job.context_staged:
                 self.storage.promote_context(job)
             job.status = "completed"
-            job.progress = 100
-            job.message = "Analysis complete"
+            job.record_progress(100, "Analysis complete")
             job.completed_at = utc_now()
             self.storage.save_job(job, lease_id=lease.lease_id)
             # Publish the terminal state before deleting inputs. If the manifest
@@ -411,7 +413,7 @@ class JobDispatcher:
                 context_to_delete = job.context_staged
                 job.status = "failed"
                 job.error = "Analysis failed. Check the inputs and try again."
-                job.message = "Analysis failed"
+                job.record_progress(job.progress, "Analysis failed")
                 job.completed_at = utc_now()
                 try:
                     # Publish the failed state before deleting anything. Its

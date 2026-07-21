@@ -7,7 +7,7 @@ Contract Analyzer is a single-container web application for analyzing contracts 
 - **SPA:** React/Vite frontend, built in a Node 22 LTS stage and copied to `frontend/dist` in the runtime image.
 - **API:** FastAPI/Uvicorn serves the SPA and API from the same origin on `PORT` (default `8080`).
 - **Jobs:** Azure Blob Storage is the only job and artifact store. The service does not use a `results` directory or a mounted volume.
-- **OCR:** DeepSeek-OCR is the primary OCR engine. Its Hugging Face snapshot is downloaded while the image is built; `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE` prevent production runtime downloads. Tesseract remains the fallback when DeepSeek-OCR cannot process a page.
+- **OCR:** Native PDF text extraction runs first. Scanned pages use Azure Foundry Mistral Document AI when configured, with Tesseract as a local fallback.
 
 The runtime image uses `python:3.13-slim-bookworm`, contains Tesseract and Poppler, and runs as an unprivileged `app` user. Its health endpoint is `GET /health`.
 
@@ -49,6 +49,9 @@ Copy `.env.example` to `.env` and replace every placeholder before running the s
 | `ENTRA_ALLOWED_TENANT_IDS` | Optional comma-separated tenant allow-list. Omit it to accept signed analyzer tokens from every organizational Entra tenant. |
 | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT` | Azure OpenAI endpoint, key, and deployed model name. |
 | `AZURE_OPENAI_API_VERSION` | Azure OpenAI API version; defaults to `2024-12-01-preview`. |
+| `AZURE_MISTRAL_DOCUMENT_AI_ENDPOINT`, `AZURE_MISTRAL_DOCUMENT_AI_API_KEY` | Azure Foundry Mistral Document AI serverless endpoint and key. Store the key as a Container App secret. |
+| `AZURE_MISTRAL_DOCUMENT_AI_MODEL` | Mistral deployment model name; defaults to `mistral-document-ai-2512`. |
+| `AZURE_MISTRAL_DOCUMENT_AI_TIMEOUT_SECONDS` | Per-page OCR request timeout; defaults to 90 seconds. |
 | `SEARXNG_URL` | SearXNG base URL used by market-research workflows. |
 | `PORT` | FastAPI listener port. Defaults to `8080`. |
 
@@ -139,8 +142,6 @@ Install Python 3.13, Node 22 LTS, Tesseract, and Poppler. Run these commands fro
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-# Required once for DeepSeek-primary OCR in local development.
-python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='deepseek-ai/DeepSeek-OCR')"
 uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
@@ -153,7 +154,7 @@ npm run dev
 
 Open `http://localhost:5173`. The Vite dev server forwards `/api/*` to `http://localhost:8080`, so the SPA uses the same API paths as production. If you instead run a compiled SPA through FastAPI, open `http://localhost:8080`.
 
-The DeepSeek snapshot is intentionally not downloaded at API startup. If it is absent locally, OCR falls back to Tesseract; use the one-time command above to match the production DeepSeek-primary behavior.
+Deploy `mistral-document-ai-2512` in Azure Foundry and configure its endpoint and key as Container App runtime settings. The application sends only pages that need OCR to the Azure service, one page at a time to preserve complete output from long documents. If Mistral is not configured or returns an error, the application automatically falls back to Tesseract. No extra Docker build argument, model snapshot, or GPU memory is required.
 
 Run backend tests with `pip install -r requirements-dev.txt` followed by `pytest`.
 

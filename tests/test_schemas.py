@@ -1,4 +1,4 @@
-from src.api.schemas import FileRole, InputReference, JobArtifact, JobRecord, JobSource
+from src.api.schemas import FileRole, InputReference, JobArtifact, JobRecord, JobSource, MAX_PROGRESS_LOG_ENTRIES
 
 
 def test_job_public_payload_hides_owner_and_blob_locations() -> None:
@@ -119,6 +119,30 @@ def test_running_job_hides_checkpointed_sources() -> None:
     assert public["artifacts"] == []
     assert public["result"] is None
     assert "finalizationReady" not in public
+
+
+def test_job_progress_log_is_bounded_and_only_returned_from_job_detail() -> None:
+    job = JobRecord(owner_oid="user-object-id", workflow="invoice")
+    job.record_progress(0, "Queued")
+    job.record_progress(12, "Extracting invoice.pdf")
+    job.record_progress(12, "Extracting invoice.pdf")
+    job.record_progress(7, "Processing invoice.pdf")
+    job.record_progress(100, "Analysis complete")
+
+    public = job.public()
+
+    assert public["progressLog"] == [
+        {"at": event.at.isoformat(), "progress": event.progress, "message": event.message}
+        for event in job.progress_log
+    ]
+    assert [event["progress"] for event in public["progressLog"]] == [0, 12, 12, 100]
+    assert "progressLog" not in job.summary_public()
+
+    for index in range(MAX_PROGRESS_LOG_ENTRIES + 1):
+        job.record_progress(100, f"Finalizing step {index}")
+
+    assert len(job.progress_log) == MAX_PROGRESS_LOG_ENTRIES
+    assert job.progress_log[0].message == "Finalizing step 1"
 
 
 def test_job_public_payload_describes_customization_without_internal_field_keys() -> None:

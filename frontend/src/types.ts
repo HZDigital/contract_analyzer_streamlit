@@ -35,6 +35,12 @@ export interface JobSource {
   previewable: boolean;
 }
 
+export interface JobProgressEvent {
+  at: string;
+  progress: number;
+  message: string;
+}
+
 export interface ResultReference {
   sourceId: string;
   sourceName: string;
@@ -54,6 +60,7 @@ export interface AnalyzerJob {
   completedAt?: string;
   progress?: number;
   message?: string;
+  progressLog: JobProgressEvent[];
   error?: string;
   retention?: Retention;
   retentionDays?: number;

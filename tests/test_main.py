@@ -41,26 +41,31 @@ class FakeJobService:
             b"pdf",
         )
 
+    def get_job(self, user, job_id) -> JobRecord:
+        job = JobRecord(owner_oid=user.oid, workflow="invoice", id=job_id)
+        job.record_progress(20, "Extracting invoice.pdf")
+        return job
+
     def list_jobs(self, user) -> list[JobRecord]:
-        return [
-            JobRecord(
-                owner_oid=user.oid,
-                workflow="invoice",
-                status="completed",
-                files=["invoice.pdf"],
-                result={"workflow": "invoice", "results": [{"invoice_number": "INV-42"}]},
-                sources=[
-                    JobSource(
-                        id="source-id",
-                        name="invoice.pdf",
-                        role="invoices",
-                        content_type="application/pdf",
-                        size=3,
-                        blob_name="private/source.pdf",
-                    )
-                ],
-            )
-        ]
+        job = JobRecord(
+            owner_oid=user.oid,
+            workflow="invoice",
+            status="completed",
+            files=["invoice.pdf"],
+            result={"workflow": "invoice", "results": [{"invoice_number": "INV-42"}]},
+            sources=[
+                JobSource(
+                    id="source-id",
+                    name="invoice.pdf",
+                    role="invoices",
+                    content_type="application/pdf",
+                    size=3,
+                    blob_name="private/source.pdf",
+                )
+            ],
+        )
+        job.record_progress(100, "Analysis complete")
+        return [job]
 
 
 def _auth_user() -> CurrentUser:
@@ -96,6 +101,7 @@ def test_create_job_accepts_the_spa_multipart_contract() -> None:
     assert response.status_code == 201
     assert response.json()["workflow"] == "invoice"
     assert response.json()["files"] == ["invoice.pdf"]
+    assert "progressLog" not in response.json()
     assert service.created is not None
     assert service.created["retention_days"] == 60
     assert service.created["uploads"][0].role == "invoices"
@@ -154,6 +160,21 @@ def test_job_list_returns_summaries_without_completed_result_content() -> None:
     assert "result" not in response.json()[0]
     assert "sources" not in response.json()[0]
     assert "artifacts" not in response.json()[0]
+    assert "progressLog" not in response.json()[0]
+
+
+def test_job_detail_returns_progress_log() -> None:
+    service = FakeJobService()
+    app.dependency_overrides[get_current_user] = _auth_user
+    try:
+        with TestClient(app) as client:
+            app.state.job_service = service
+            response = client.get("/api/jobs/job-id")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["progressLog"][0]["message"] == "Extracting invoice.pdf"
 
 
 def test_source_preview_is_private_inline_content() -> None:

@@ -16,16 +16,3 @@ openpyxl==3.1.5
 python-docx==1.1.2
 python-dotenv==1.0.1
 requests==2.32.3
-transformers==4.46.3
-huggingface-hub==0.28.1
-tokenizers==0.20.3
-torch==2.6.0
-torchvision==0.21.0
-accelerate==1.4.0
-addict==2.4.0
-einops==0.8.1
-easydict==1.13
-timm==1.0.15
-numpy==2.2.3
-scipy==1.15.2
-opencv-python-headless==4.11.0.86

@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from src.api.schemas import JobRecord
@@ -17,6 +18,28 @@ def test_manifest_uses_the_same_retention_tag_as_its_result_data() -> None:
     storage.save_job(JobRecord(owner_oid="object-id", workflow="invoice", retention="temporary"), create_only=True)
 
     assert captured["tags"] == {"kind": "manifest", "retention": "temporary"}
+
+
+def test_manifest_persists_progress_log_with_public_field_names() -> None:
+    storage = BlobJobStorage(Settings.model_validate({"AZURE_STORAGE_CONNECTION_STRING": "UseDevelopmentStorage=true"}))
+    captured: dict[str, Any] = {}
+
+    def capture_write(_name: str, data: bytes, *_args: Any, **_kwargs: Any) -> None:
+        captured["manifest"] = json.loads(data)
+
+    storage._write_bytes = capture_write  # type: ignore[method-assign]
+    job = JobRecord(owner_oid="object-id", workflow="invoice")
+    job.record_progress(10, "Extracting invoice.pdf")
+
+    storage.save_job(job, create_only=True)
+
+    assert captured["manifest"]["progressLog"] == [
+        {
+            "at": job.progress_log[0].at.isoformat().replace("+00:00", "Z"),
+            "progress": 10,
+            "message": "Extracting invoice.pdf",
+        }
+    ]
 
 
 def test_source_uses_an_opaque_path_and_starts_transient() -> None:

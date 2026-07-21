@@ -16,6 +16,10 @@ describe("job response normalization", () => {
             retention: "temporary",
             retentionDays: 60,
             expiresAt: "2026-09-01T12:00:00Z",
+            progressLog: [
+              { at: "2026-08-01T11:30:00Z", progress: 25, message: "Extracting invoice.pdf" },
+              { at: "invalid entry" },
+            ],
             coverage: ["Review extracted values against the source."],
             customization: {
               instructions: "Focus on payment controls.",
@@ -37,6 +41,7 @@ describe("job response normalization", () => {
         sources: [{ id: "source", name: "invoice.pdf", role: "invoices", previewable: true }],
         retention: "temporary",
         retentionDays: 60,
+        progressLog: [{ at: "2026-08-01T11:30:00Z", progress: 25, message: "Extracting invoice.pdf" }],
         coverage: ["Review extracted values against the source."],
         customization: {
           instructions: "Focus on payment controls.",
@@ -51,7 +56,7 @@ describe("job response normalization", () => {
     expect(normalizeJob({ workflow: "invoice" })).toBeUndefined();
     expect(isTerminalJob("completed")).toBe(true);
     expect(isTerminalJob("running")).toBe(false);
-    expect(hasActiveJobs([{ id: "done", workflow: "invoice", status: "completed", coverage: [], files: [], artifacts: [], sources: [], raw: {} }])).toBe(false);
-    expect(hasActiveJobs([{ id: "active", workflow: "invoice", status: "running", coverage: [], files: [], artifacts: [], sources: [], raw: {} }])).toBe(true);
+    expect(hasActiveJobs([{ id: "done", workflow: "invoice", status: "completed", coverage: [], files: [], artifacts: [], sources: [], progressLog: [], raw: {} }])).toBe(false);
+    expect(hasActiveJobs([{ id: "active", workflow: "invoice", status: "running", coverage: [], files: [], artifacts: [], sources: [], progressLog: [], raw: {} }])).toBe(true);
   });
 });

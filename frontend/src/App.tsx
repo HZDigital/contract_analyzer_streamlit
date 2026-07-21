@@ -634,6 +634,15 @@ function SignOutIcon() {
   );
 }
 
+function ArrowRightIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12h14" />
+      <path d="m13 6 6 6-6 6" />
+    </svg>
+  );
+}
+
 function BrandLogo({
   config,
   logo,
@@ -708,12 +717,22 @@ function Dashboard({
         <div className="workflow-grid">
           {modules.map((module) => (
             <article className="workflow-card" key={module.id}>
-              <div className="workflow-card-heading">
-                <span className="workflow-code">{module.shortCode}</span>
-                <h3>{module.title}</h3>
-              </div>
-              <p>{module.description}</p>
-              <button className="card-button" type="button" onClick={() => onOpenModule(module.id)}>Open module</button>
+              <button
+                className="workflow-card-button"
+                type="button"
+                aria-label={`Open ${module.title} module`}
+                onClick={() => onOpenModule(module.id)}
+              >
+                <div className="workflow-card-heading">
+                  <span className="workflow-code">{module.shortCode}</span>
+                  <h3>{module.title}</h3>
+                </div>
+                <p>{module.description}</p>
+                <span className="workflow-card-action">
+                  Open module
+                  <ArrowRightIcon />
+                </span>
+              </button>
             </article>
           ))}
         </div>
@@ -1469,6 +1488,20 @@ function JobDetails({
               <div><span>Progress</span><strong>{Math.max(0, Math.min(100, Math.round(job.progress)))}%</strong></div>
               <progress value={Math.max(0, Math.min(100, job.progress))} max="100" />
             </div>
+          ) : null}
+          {job.progressLog.length > 0 ? (
+            <details className="result-context-section progress-log">
+              <summary>Analysis activity ({job.progressLog.length})</summary>
+              <ol aria-live="polite">
+                {[...job.progressLog].reverse().map((entry) => (
+                  <li key={`${entry.at}-${entry.progress}-${entry.message}`}>
+                    <time dateTime={entry.at}>{formatDate(entry.at)}</time>
+                    <span>{entry.progress}%</span>
+                    <p>{entry.message}</p>
+                  </li>
+                ))}
+              </ol>
+            </details>
           ) : null}
           <section className="result-context-section">
             <p className="eyebrow">Run details</p>

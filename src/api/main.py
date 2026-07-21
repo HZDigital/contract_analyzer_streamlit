@@ -126,7 +126,7 @@ async def create_job(
     finally:
         for uploaded_file in files:
             await uploaded_file.close()
-    return job.public()
+    return job.summary_public()
 
 
 @app.get("/api/jobs/{job_id}")
