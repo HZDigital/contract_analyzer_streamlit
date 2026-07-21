@@ -119,3 +119,66 @@ def test_running_job_hides_checkpointed_sources() -> None:
     assert public["artifacts"] == []
     assert public["result"] is None
     assert "finalizationReady" not in public
+
+
+def test_job_public_payload_describes_customization_without_internal_field_keys() -> None:
+    job = JobRecord(
+        owner_oid="user-object-id",
+        workflow="invoice",
+        options={
+            "customInstructions": "Focus on payment controls.",
+            "customOutputFields": [
+                {
+                    "key": "field_1",
+                    "name": "Approval required",
+                    "instruction": "Return yes only when explicit.",
+                    "type": "yes_no",
+                }
+            ],
+        },
+    )
+
+    public = job.public()
+
+    assert public["customization"] == {
+        "instructions": "Focus on payment controls.",
+        "outputFields": [
+            {
+                "name": "Approval required",
+                "instruction": "Return yes only when explicit.",
+                "type": "yes_no",
+            }
+        ],
+    }
+    assert "field_1" not in str(public["customization"])
+
+
+def test_job_public_payload_applies_selected_standard_output_fields() -> None:
+    job = JobRecord(
+        owner_oid="user-object-id",
+        workflow="invoice",
+        status="completed",
+        options={"standardOutputFields": ["invoice_number", "supplier"]},
+        result={
+            "summary": {"total": 1, "successful": 1, "failed": 0},
+            "results": [
+                {
+                    "file_name": "invoice.pdf",
+                    "status": "success",
+                    "invoice_number": "INV-42",
+                    "total_amount": "120.00",
+                    "supplier_name": "Supplier GmbH",
+                }
+            ],
+        },
+    )
+
+    public = job.public()
+
+    assert public["customization"]["standardOutputFields"] == ["invoice_number", "supplier"]
+    assert public["result"]["results"][0] == {
+        "file_name": "invoice.pdf",
+        "status": "success",
+        "invoice_number": "INV-42",
+        "supplier_name": "Supplier GmbH",
+    }

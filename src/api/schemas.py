@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.customization import public_customization, standard_output_fields_from_options
 from src.api.public_results import curate_public_result
 
 
@@ -145,10 +146,19 @@ class JobRecord(BaseModel):
             "retentionDays": self.retention_days,
             "expiresAt": expires_at.isoformat() if expires_at else None,
             "coverage": self._coverage_notes(),
+            "customization": public_customization(self.options),
             "artifacts": [artifact.public() for artifact in self.artifacts] if completed else [],
             # Running manifests can contain a private finalization checkpoint.
             "sources": [source.public() for source in self.sources] if completed else [],
-            "result": curate_public_result(self.workflow, self.result) if completed else None,
+            "result": (
+                curate_public_result(
+                    self.workflow,
+                    self.result,
+                    standard_output_fields_from_options(self.workflow, self.options),
+                )
+                if completed
+                else None
+            ),
         }
 
     def _coverage_notes(self) -> list[str]:
@@ -192,6 +202,21 @@ class JobRecord(BaseModel):
             notes.append("Extracted invoice values are not reconciled against ERP, purchase-order, or supplier-master data.")
         elif self.workflow == "product_request":
             notes.append("Product grouping is an AI-assisted consolidation and should be checked before sourcing decisions.")
+
+        customization = public_customization(self.options)
+        if customization:
+            selected_standard = customization.get("standardOutputFields")
+            if isinstance(selected_standard, list):
+                notes.append(
+                    f"The output includes {len(selected_standard):,} selected standard business fields; removed fields are omitted from results and exports."
+                )
+            if customization.get("instructions") or customization.get("outputFields"):
+                notes.append(
+                    "Customized output follows the user-defined instructions and requested fields alongside the selected standard result."
+                )
+                notes.append(
+                    "Each custom-analysis request examines up to 30,000 source characters; multi-document requests divide that allowance across sources."
+                )
 
         if self.status == "completed":
             notes.append(

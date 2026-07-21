@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 
 ResultRecord = dict[str, Any]
-Projector = Callable[[Mapping[str, Any]], ResultRecord]
+SelectedFields = frozenset[str] | None
+Projector = Callable[[Mapping[str, Any], SelectedFields], ResultRecord]
+RowProjector = Callable[[Mapping[str, Any]], ResultRecord]
 _MISSING = object()
 _PUBLIC_ITEM_ERROR = "This item could not be analyzed. Review the source document and try again."
 _PRODUCT_GROUPING_WARNING = (
@@ -30,33 +32,41 @@ _TENDER_DEFAULT_FIELDS = (
 _BLOCKED_TENDER_FIELDS = {"chancen in %", "chance in %", "win probability"}
 
 
-def curate_public_result(workflow: str, value: Any) -> ResultRecord:
+def curate_public_result(
+    workflow: str,
+    value: Any,
+    standard_output_fields: Iterable[str] | None = None,
+) -> ResultRecord:
     """Project a workflow result onto its explicit end-user data contract."""
 
     source = _record(value)
     projector = _PROJECTORS.get(workflow)
     if source is None or projector is None:
         return {"notice": "This analysis result is not available in this application version."}
-    return {"workflow": workflow, **projector(source)}
+    selected = frozenset(standard_output_fields) if standard_output_fields is not None else None
+    return {"workflow": workflow, **projector(source, selected)}
 
 
-def _product_request(source: Mapping[str, Any]) -> ResultRecord:
+def _product_request(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
     result = {
         "summary": _count_summary(source.get("summary")),
-        "results": _documents(source.get("results"), _product_document),
-        "consolidated_products": _rows(source.get("consolidated_products"), _consolidated_product),
+        "results": _documents(source.get("results"), lambda item: _product_document(item, selected)),
     }
+    if _included(selected, "consolidated_products"):
+        result["consolidated_products"] = _rows(source.get("consolidated_products"), _consolidated_product)
     if source.get("grouping_error") or _nonempty_list(source.get("warnings")):
         result["warnings"] = [_PRODUCT_GROUPING_WARNING]
     return result
 
 
-def _product_document(source: Mapping[str, Any]) -> ResultRecord:
-    result = _fields(source, "client_name", "contract_type", "total_estimated_value")
-    result["products"] = _rows(
-        source.get("products"),
-        lambda item: _fields(item, "product_name", "quantity", "unit", "description"),
-    )
+def _product_document(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
+    result = _selected_fields(source, selected, "client_name", "contract_type", "total_estimated_value")
+    if _included(selected, "products"):
+        result["products"] = _rows(
+            source.get("products"),
+            lambda item: _fields(item, "product_name", "quantity", "unit", "description"),
+        )
+    _put_custom_analysis(result, source)
     return result
 
 
@@ -70,16 +80,17 @@ def _consolidated_product(source: Mapping[str, Any]) -> ResultRecord:
     }
 
 
-def _invoice(source: Mapping[str, Any]) -> ResultRecord:
+def _invoice(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
     return {
         "summary": _count_summary(source.get("summary")),
-        "results": _documents(source.get("results"), _invoice_document),
+        "results": _documents(source.get("results"), lambda item: _invoice_document(item, selected)),
     }
 
 
-def _invoice_document(source: Mapping[str, Any]) -> ResultRecord:
-    result = _fields(
+def _invoice_document(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
+    result = _selected_fields(
         source,
+        selected,
         "invoice_number",
         "invoice_date",
         "due_date",
@@ -90,75 +101,85 @@ def _invoice_document(source: Mapping[str, Any]) -> ResultRecord:
         "tax_rate_percent",
         "payment_terms",
         "po_number",
-        "supplier_name",
-        "supplier_address",
-        "customer_name",
-        "customer_address",
-        "ship_to",
-        "tax_id",
         "contract_type",
         "notes",
     )
-    result["products"] = _rows(
-        source.get("products"),
-        lambda item: _fields(
-            item,
-            "product_name",
-            "description",
-            "quantity",
-            "unit",
-            "unit_price",
-            "line_total",
-            "currency",
-            "tax_rate_percent",
-            "sku_or_part_number",
+    if _included(selected, "supplier"):
+        result.update(_fields(source, "supplier_name", "supplier_address", "tax_id"))
+    if _included(selected, "customer"):
+        result.update(_fields(source, "customer_name", "customer_address", "ship_to"))
+    if _included(selected, "products"):
+        result["products"] = _rows(
+            source.get("products"),
+            lambda item: _fields(
+                item,
+                "product_name",
+                "description",
+                "quantity",
+                "unit",
+                "unit_price",
+                "line_total",
+                "currency",
+                "tax_rate_percent",
+                "sku_or_part_number",
+            ),
+        )
+    _put_custom_analysis(result, source)
+    return result
+
+
+def _normalstunden(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
+    return {
+        "summary": _count_summary(source.get("summary")),
+        "results": _documents(source.get("results"), lambda item: _normalstunden_document(item, selected)),
+    }
+
+
+def _normalstunden_document(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
+    result = _selected_fields(source, selected, "supplier", "hours_total", "hourly_rates")
+    if _included(selected, "entries"):
+        result["entries"] = _rows(
+            source.get("entries"),
+            lambda item: _fields(item, "hours", "hourly_rate"),
+        )
+    _put_custom_analysis(result, source)
+    return result
+
+
+def _detailed_contract(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
+    return {
+        "summary": _count_summary(source.get("summary")),
+        "results": _documents(
+            source.get("results"),
+            lambda item: _detailed_analysis(item, selected),
+            nested_analysis=True,
         ),
-    )
-    return result
-
-
-def _normalstunden(source: Mapping[str, Any]) -> ResultRecord:
-    return {
-        "summary": _count_summary(source.get("summary")),
-        "results": _documents(source.get("results"), _normalstunden_document),
     }
 
 
-def _normalstunden_document(source: Mapping[str, Any]) -> ResultRecord:
-    result = _fields(source, "supplier", "hours_total", "hourly_rates")
-    result["entries"] = _rows(
-        source.get("entries"),
-        lambda item: _fields(item, "hours", "hourly_rate"),
-    )
-    return result
-
-
-def _detailed_contract(source: Mapping[str, Any]) -> ResultRecord:
-    return {
-        "summary": _count_summary(source.get("summary")),
-        "results": _documents(source.get("results"), _detailed_analysis, nested_analysis=True),
-    }
-
-
-def _detailed_analysis(source: Mapping[str, Any]) -> ResultRecord:
-    result = _fields(source, "summary", "client_name", "contract_type", "start_date", "end_date")
-    result["products_services"] = _rows(
-        source.get("products_services"),
-        lambda item: _fields(item, "name", "description", "quantity", "unit", "rate"),
-    )
-    result["key_clauses"] = _rows(
-        source.get("key_clauses"),
-        lambda item: _fields(item, "type", "description", "quote"),
-    )
-    result["risk_areas"] = _rows(
-        source.get("risk_areas"),
-        lambda item: _fields(item, "concern", "quote"),
-    )
+def _detailed_analysis(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
+    result = _selected_fields(source, selected, "summary", "client_name", "contract_type", "start_date", "end_date")
+    if _included(selected, "products_services"):
+        result["products_services"] = _rows(
+            source.get("products_services"),
+            lambda item: _fields(item, "name", "description", "quantity", "unit", "rate"),
+        )
+    if _included(selected, "key_clauses"):
+        result["key_clauses"] = _rows(
+            source.get("key_clauses"),
+            lambda item: _fields(item, "type", "description", "quote"),
+        )
+    if _included(selected, "risk_areas"):
+        result["risk_areas"] = _rows(
+            source.get("risk_areas"),
+            lambda item: _fields(item, "concern", "quote"),
+        )
+    _put_custom_analysis(result, source)
     _add_error(result, source)
     return result
 
 
-def _tender(source: Mapping[str, Any]) -> ResultRecord:
+def _tender(source: Mapping[str, Any], _selected: SelectedFields = None) -> ResultRecord:
     display_fields = _tender_display_fields(source)
     result = {
         "summary": _count_summary(source.get("summary")),
@@ -205,110 +226,124 @@ def _market_situation(value: Any) -> ResultRecord:
     return result
 
 
-def _cooperation_review(source: Mapping[str, Any]) -> ResultRecord:
+def _cooperation_review(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
     result = _fields(source, "standard_contract", "supplier_agreements")
     analysis = _record(source.get("analysis"))
-    result["analysis"] = _cooperation_analysis(analysis or {})
+    result["analysis"] = _cooperation_analysis(analysis or {}, selected)
+    _put_custom_analysis(result, source)
     return result
 
 
-def _cooperation_analysis(source: Mapping[str, Any]) -> ResultRecord:
+def _cooperation_analysis(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
     result: ResultRecord = {}
-    summary = source.get("summary")
-    if isinstance(summary, Mapping):
-        result["summary"] = _fields(summary, "contract_type", "parties", "duration", "status", "description")
-    else:
-        _put(result, "summary", summary)
-    result["deviations"] = _rows(
-        source.get("deviations"),
-        lambda item: _fields(item, "title", "severity", "standard", "supplier", "impact", "section"),
-    )
-    result["risks"] = _rows(
-        source.get("risks"),
-        lambda item: _fields(
-            item,
-            "title",
-            "category",
-            "severity",
-            "description",
-            "affected_section",
-            "quote",
-            "recommendation",
-        ),
-    )
-    result["key_clauses"] = _rows(
-        source.get("key_clauses"),
-        lambda item: _fields(item, "type", "description", "quote", "importance"),
-    )
-    result["recommendations"] = _rows(
-        source.get("recommendations"),
-        lambda item: _fields(item, "action", "priority", "rationale", "section"),
-    )
+    if _included(selected, "summary"):
+        summary = source.get("summary")
+        if isinstance(summary, Mapping):
+            result["summary"] = _fields(summary, "contract_type", "parties", "duration", "status", "description")
+        else:
+            _put(result, "summary", summary)
+    if _included(selected, "deviations"):
+        result["deviations"] = _rows(
+            source.get("deviations"),
+            lambda item: _fields(item, "title", "severity", "standard", "supplier", "impact", "section"),
+        )
+    if _included(selected, "risks"):
+        result["risks"] = _rows(
+            source.get("risks"),
+            lambda item: _fields(
+                item,
+                "title",
+                "category",
+                "severity",
+                "description",
+                "affected_section",
+                "quote",
+                "recommendation",
+            ),
+        )
+    if _included(selected, "key_clauses"):
+        result["key_clauses"] = _rows(
+            source.get("key_clauses"),
+            lambda item: _fields(item, "type", "description", "quote", "importance"),
+        )
+    if _included(selected, "recommendations"):
+        result["recommendations"] = _rows(
+            source.get("recommendations"),
+            lambda item: _fields(item, "action", "priority", "rationale", "section"),
+        )
     _add_error(result, source)
     return result
 
 
-def _factory_certificate(source: Mapping[str, Any]) -> ResultRecord:
+def _factory_certificate(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
     result = _fields(source, "source_files")
     result["extraction_errors"] = _rows(source.get("extraction_errors"), _failed_source)
     analysis = _record(source.get("analysis"))
-    result["analysis"] = _factory_analysis(analysis or {})
+    result["analysis"] = _factory_analysis(analysis or {}, selected)
+    _put_custom_analysis(result, source)
     return result
 
 
-def _factory_analysis(source: Mapping[str, Any]) -> ResultRecord:
-    result = _fields(source, "identified_specs", "identified_certificates", "summary")
-    result["comparisons"] = _rows(
-        source.get("comparisons"),
-        lambda item: _fields(
-            item,
-            "parameter",
-            "unit",
-            "spec_min",
-            "spec_max",
-            "spec_nominal",
-            "measured_value",
-            "measured_from",
-            "status",
-            "deviation",
-        ),
-    )
+def _factory_analysis(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
+    result = _selected_fields(source, selected, "identified_specs", "identified_certificates", "summary")
+    if _included(selected, "comparisons"):
+        result["comparisons"] = _rows(
+            source.get("comparisons"),
+            lambda item: _fields(
+                item,
+                "parameter",
+                "unit",
+                "spec_min",
+                "spec_max",
+                "spec_nominal",
+                "measured_value",
+                "measured_from",
+                "status",
+                "deviation",
+            ),
+        )
     _add_error(result, source)
     return result
 
 
-def _large_scanner(source: Mapping[str, Any]) -> ResultRecord:
-    result = _fields(source, "file_name", "page_count", "report")
+def _large_scanner(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
+    result = _fields(source, "file_name", "page_count")
+    if _included(selected, "report"):
+        _put(result, "report", source.get("report"))
     merged = _record(source.get("merged"))
-    result["merged"] = _large_merged(merged or {})
+    result["merged"] = _large_merged(merged or {}, selected)
+    _put_custom_analysis(result, source)
     return result
 
 
-def _large_merged(source: Mapping[str, Any]) -> ResultRecord:
+def _large_merged(source: Mapping[str, Any], selected: SelectedFields = None) -> ResultRecord:
     result = _fields(source, "source_file")
-    categories = _record(source.get("findings_by_category")) or {}
-    result["findings_by_category"] = {
-        str(category): _rows(rows, _large_finding)
-        for category, rows in categories.items()
-        if str(category).strip() and len(str(category)) <= 160
-    }
-    result["red_flags"] = _rows(
-        source.get("red_flags"),
-        lambda item: _fields(
-            item,
-            "issue",
-            "why_it_matters",
-            "section_ref",
-            "page_ref",
-            "quote",
-            "risk_level",
-            "inference",
-        ),
-    )
-    result["cross_reference_gaps"] = _rows(
-        source.get("cross_reference_gaps"),
-        lambda item: _fields(item, "reference", "page_ref", "quote"),
-    )
+    if _included(selected, "findings_by_category"):
+        categories = _record(source.get("findings_by_category")) or {}
+        result["findings_by_category"] = {
+            str(category): _rows(rows, _large_finding)
+            for category, rows in categories.items()
+            if str(category).strip() and len(str(category)) <= 160
+        }
+    if _included(selected, "red_flags"):
+        result["red_flags"] = _rows(
+            source.get("red_flags"),
+            lambda item: _fields(
+                item,
+                "issue",
+                "why_it_matters",
+                "section_ref",
+                "page_ref",
+                "quote",
+                "risk_level",
+                "inference",
+            ),
+        )
+    if _included(selected, "cross_reference_gaps"):
+        result["cross_reference_gaps"] = _rows(
+            source.get("cross_reference_gaps"),
+            lambda item: _fields(item, "reference", "page_ref", "quote"),
+        )
     return result
 
 
@@ -325,7 +360,33 @@ def _large_finding(source: Mapping[str, Any]) -> ResultRecord:
     )
 
 
-def _documents(value: Any, projector: Projector, *, nested_analysis: bool = False) -> list[ResultRecord]:
+def _put_custom_analysis(target: ResultRecord, source: Mapping[str, Any]) -> None:
+    custom = _record(source.get("custom_analysis"))
+    if custom is None:
+        return
+    target["custom_analysis"] = {
+        **_fields(custom, "summary", "warning"),
+        "findings": _rows(
+            custom.get("findings"),
+            lambda item: _fields(item, "finding", "explanation", "source_file", "page_ref", "quote"),
+        ),
+        "fields": _rows(
+            custom.get("fields"),
+            lambda item: _fields(
+                item,
+                "field",
+                "type",
+                "value",
+                "explanation",
+                "source_file",
+                "page_ref",
+                "quote",
+            ),
+        ),
+    }
+
+
+def _documents(value: Any, projector: RowProjector, *, nested_analysis: bool = False) -> list[ResultRecord]:
     documents: list[ResultRecord] = []
     for source in _record_list(value):
         analysis = _record(source.get("analysis")) if nested_analysis else source
@@ -394,6 +455,14 @@ def _fields(source: Mapping[str, Any], *names: str) -> ResultRecord:
     return result
 
 
+def _selected_fields(source: Mapping[str, Any], selected: SelectedFields, *names: str) -> ResultRecord:
+    return _fields(source, *(name for name in names if _included(selected, name)))
+
+
+def _included(selected: SelectedFields, field: str) -> bool:
+    return selected is None or field in selected
+
+
 def _put(target: ResultRecord, key: str, value: Any) -> None:
     safe = _safe_value(value)
     if safe is not _MISSING:
@@ -413,7 +482,7 @@ def _add_error(target: ResultRecord, source: Mapping[str, Any]) -> None:
         target["error"] = _PUBLIC_ITEM_ERROR
 
 
-def _rows(value: Any, projector: Projector) -> list[ResultRecord]:
+def _rows(value: Any, projector: RowProjector) -> list[ResultRecord]:
     return [projector(item) for item in _record_list(value)]
 
 

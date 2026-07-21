@@ -27,6 +27,16 @@ The frontend groups seven active workflow IDs into modules that match day-to-day
 
 All five modules and all seven user-facing workflows are always available to authenticated users.
 
+### Customized Analysis
+
+Every user-facing workflow has an output editor. Its standard business fields are included by default and can be removed individually when they are not needed. Extraction still uses the stable workflow contract, but removed fields are omitted from the published result and its generated exports. Status, source provenance, validation messages, and retention information remain mandatory.
+
+Users can also enter an optional analysis instruction and define up to 20 additional named output fields. Supported field types are text, number, yes/no, and list. Additional findings and requested fields appear in a separate **Customized output** section and in the curated JSON export.
+
+Customization does not replace the application's fixed system and security rules. The custom analyzer must use only supplied source text, treats instructions inside documents as data, returns only the declared structure, and cannot expose hidden prompts, credentials, or implementation context. Unexpected model keys are discarded. Quotations are retained as evidence only when their normalized wording exists in the named source, and Deep review page references are retained only when they identify pages in the analyzed section.
+
+Each custom-analysis request examines at most 30,000 source characters. Multi-document comparisons distribute that allowance across their source files; Deep review applies customization to each existing page-labelled chunk and merges the results. Customized analysis adds model calls and can therefore increase processing time and cost. When no custom instruction or output field is supplied, no custom model call is made.
+
 ## Required Configuration
 
 Copy `.env.example` to `.env` and replace every placeholder before running the stack. Do not commit `.env`.
@@ -75,7 +85,7 @@ The deployment workflow merges and reads back `infra/storage-lifecycle-policy.js
 - Delete `kind=source`, `kind=artifact`, and `kind=context` blobs with `retention=transient` after a seven-day recovery window. Sources, exports, and analysis context are promoted to the selected job retention only after their private manifest checkpoint is durable.
 - Delete private `kind=outcome`, `retention=transient` workflow checkpoints after the same seven-day recovery window. These contain the result and export bytes only long enough to make interrupted finalization replayable without another model call.
 
-Transient processing inputs are removed after every terminal job. After a successful analysis, the original source files are copied into the private job prefix so authenticated users can reopen evidence from the result view. Retained sources follow the job's selected retention: temporary sources expire after 60 days, permanent sources remain until the job is deleted manually, and deleting a job removes its manifest, outputs, context, and sources. Jobs completed before source retention was introduced cannot provide a source preview.
+Transient processing inputs are removed after every terminal job. After a successful analysis, the original source files are copied into the private job prefix so authenticated users can reopen evidence from the result view. For Normalstunden ZIP uploads, eligible member PDFs are retained as private derived sources alongside the original archive so their result evidence can open in the PDF review drawer. Retained sources follow the job's selected retention: temporary sources expire after 60 days, permanent sources remain until the job is deleted manually, and deleting a job removes its manifest, outputs, context, and sources. Jobs completed before source retention was introduced cannot provide a source preview.
 
 The API exposes retained documents only through owner-scoped opaque source IDs. It does not return Blob paths or SAS URLs. PDF references with a source filename and quote or page open in a lazy-loaded review drawer. The browser highlights only an exact normalized quote match in the PDF text layer; scanned documents without a text layer can be opened at the reported page but require OCR coordinates for pixel-accurate highlighting.
 

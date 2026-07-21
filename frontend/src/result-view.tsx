@@ -57,6 +57,13 @@ const FRIENDLY_LABELS: Record<string, string> = {
   is_complete_document: "Complete document supplied",
   inference: "AI interpretation",
   warnings: "Review notes",
+  custom_analysis: "Customized output",
+  fields: "Requested fields",
+  field: "Requested field",
+  value: "Extracted value",
+  finding: "Additional finding",
+  explanation: "Interpretation",
+  warning: "Review note",
 };
 
 const BUSINESS_STATUS_LABELS: Record<string, string> = {
@@ -67,6 +74,12 @@ const BUSINESS_STATUS_LABELS: Record<string, string> = {
   OUT: "Out of tolerance",
   MISSING: "Required value missing",
   NO_SPEC: "No matching specification",
+};
+const CUSTOM_OUTPUT_TYPE_LABELS: Record<string, string> = {
+  text: "Text",
+  number: "Number",
+  yes_no: "Yes / No",
+  list: "List",
 };
 
 function asRecord(value: unknown): ResultRecord | undefined {
@@ -132,6 +145,9 @@ function valueText(value: unknown): string {
 function fieldValueText(key: string, value: unknown): string {
   if (key === "status" && typeof value === "string") {
     return BUSINESS_STATUS_LABELS[value] ?? valueText(value);
+  }
+  if (key === "type" && typeof value === "string") {
+    return CUSTOM_OUTPUT_TYPE_LABELS[value] ?? valueText(value);
   }
   return valueText(value);
 }

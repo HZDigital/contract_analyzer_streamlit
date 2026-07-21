@@ -17,6 +17,11 @@ describe("job response normalization", () => {
             retentionDays: 60,
             expiresAt: "2026-09-01T12:00:00Z",
             coverage: ["Review extracted values against the source."],
+            customization: {
+              instructions: "Focus on payment controls.",
+              standardOutputFields: ["invoice_number", "supplier"],
+              outputFields: [{ name: "Approval required", instruction: "Explicit clauses only.", type: "yes_no" }],
+            },
           },
         ],
       },
@@ -33,6 +38,11 @@ describe("job response normalization", () => {
         retention: "temporary",
         retentionDays: 60,
         coverage: ["Review extracted values against the source."],
+        customization: {
+          instructions: "Focus on payment controls.",
+          standardOutputFields: ["invoice_number", "supplier"],
+          outputFields: [{ name: "Approval required", instruction: "Explicit clauses only.", type: "yes_no" }],
+        },
       }),
     ]);
   });

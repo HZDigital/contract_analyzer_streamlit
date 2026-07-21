@@ -4,6 +4,21 @@ export type Retention = "temporary" | "permanent";
 
 export type OptionValue = string | number | boolean;
 
+export type CustomOutputType = "text" | "number" | "yes_no" | "list";
+
+export interface CustomOutputField {
+  id: string;
+  name: string;
+  instruction: string;
+  type: CustomOutputType;
+}
+
+export interface JobCustomization {
+  instructions: string;
+  standardOutputFields?: string[];
+  outputFields: Array<Omit<CustomOutputField, "id">>;
+}
+
 export interface JobArtifact {
   id: string;
   name: string;
@@ -44,6 +59,7 @@ export interface AnalyzerJob {
   retentionDays?: number;
   expiresAt?: string;
   coverage: string[];
+  customization?: JobCustomization;
   files: string[];
   artifacts: JobArtifact[];
   sources: JobSource[];
@@ -59,7 +75,7 @@ export interface SubmittedFile {
 export interface SubmitJobInput {
   workflow: WorkflowId;
   retention: Retention;
-  options: Record<string, OptionValue>;
+  options: Record<string, unknown>;
   files: SubmittedFile[];
 }
 

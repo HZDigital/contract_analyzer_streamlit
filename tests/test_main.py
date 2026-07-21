@@ -117,6 +117,28 @@ def test_create_job_rejects_disagreeing_retention_field_aliases() -> None:
     assert response.json() == {"error": "Retention day values must match."}
 
 
+def test_create_job_rejects_invalid_customization_before_service_submission() -> None:
+    service = FakeJobService()
+    app.dependency_overrides[get_current_user] = _auth_user
+    try:
+        with TestClient(app) as client:
+            app.state.job_service = service
+            response = client.post(
+                "/api/jobs",
+                data={
+                    **_job_form(),
+                    "options": '{"customOutputFields":[{"name":"Risk","type":"unsupported"}]}',
+                },
+                files=[("files", ("invoice.pdf", b"pdf", "application/pdf"))],
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    assert response.json() == {"error": "Custom output field 1 has an unsupported output type."}
+    assert service.created is None
+
+
 def test_job_list_returns_summaries_without_completed_result_content() -> None:
     service = FakeJobService()
     app.dependency_overrides[get_current_user] = _auth_user

@@ -72,4 +72,25 @@ describe("ResultView", () => {
     expect(markup).not.toContain("internal-folder");
     expect(markup).not.toContain("Matched Rows");
   });
+
+  it("renders curated customized output with business labels", () => {
+    const markup = renderToStaticMarkup(
+      <ResultView value={{
+        workflow: "invoice",
+        results: [{
+          file_name: "invoice.pdf",
+          status: "success",
+          custom_analysis: {
+            summary: "Payment approval is required.",
+            fields: [{ field: "Approval required", type: "yes_no", value: true }],
+          },
+        }],
+      }} />,
+    );
+
+    expect(markup).toContain("Customized output");
+    expect(markup).toContain("Requested fields");
+    expect(markup).toContain("Approval required");
+    expect(markup).toContain("Yes / No");
+  });
 });

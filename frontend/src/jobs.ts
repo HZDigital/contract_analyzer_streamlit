@@ -1,4 +1,4 @@
-import type { AnalyzerJob, JobArtifact, JobSource } from "./types";
+import type { AnalyzerJob, CustomOutputType, JobArtifact, JobCustomization, JobSource } from "./types";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -102,6 +102,37 @@ function normalizeSources(value: unknown): JobSource[] {
   });
 }
 
+function normalizeCustomization(value: unknown): JobCustomization | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const instructions = typeof value.instructions === "string" ? value.instructions : "";
+  const hasStandardOutputFields = Array.isArray(value.standardOutputFields);
+  const standardOutputFields = hasStandardOutputFields
+    ? value.standardOutputFields.filter((item): item is string => typeof item === "string")
+    : undefined;
+  const outputFields = Array.isArray(value.outputFields)
+    ? value.outputFields.flatMap((item) => {
+        if (!isRecord(item)) {
+          return [];
+        }
+        const name = asString(item.name);
+        const outputType = asString(item.type);
+        if (!name || !["text", "number", "yes_no", "list"].includes(outputType ?? "")) {
+          return [];
+        }
+        return [{
+          name,
+          instruction: typeof item.instruction === "string" ? item.instruction : "",
+          type: outputType as CustomOutputType,
+        }];
+      })
+    : [];
+  return instructions || outputFields.length > 0 || hasStandardOutputFields
+    ? { instructions, standardOutputFields, outputFields }
+    : undefined;
+}
+
 export function normalizeJob(value: unknown): AnalyzerJob | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -135,6 +166,7 @@ export function normalizeJob(value: unknown): AnalyzerJob | undefined {
     retentionDays: asNumber(value.retentionDays ?? value.retention_days),
     expiresAt: asString(value.expiresAt ?? value.expires_at),
     coverage: asStringList(value.coverage),
+    customization: normalizeCustomization(value.customization),
     files: asStringList(value.files ?? value.documents ?? value.inputFiles),
     artifacts: normalizeArtifacts(value.artifacts ?? value.outputs ?? value.downloads),
     sources: normalizeSources(value.sources ?? value.sourceDocuments),

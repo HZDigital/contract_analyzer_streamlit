@@ -17,7 +17,15 @@ import { analyzerApiScopes } from "./config";
 import { deploymentName, logoUrl, type DeploymentConfig } from "./deployment-config";
 import { hasActiveJobs, isTerminalJob } from "./jobs";
 import { ResultView } from "./result-view";
-import type { AnalyzerJob, OptionValue, ResultReference, Retention, SubmittedFile } from "./types";
+import type {
+  AnalyzerJob,
+  CustomOutputField,
+  CustomOutputType,
+  OptionValue,
+  ResultReference,
+  Retention,
+  SubmittedFile,
+} from "./types";
 import {
   analysisModules,
   moduleById,
@@ -35,6 +43,9 @@ type View = "dashboard" | "submit" | "history";
 type NormalstundenSource = "pdf" | "zip";
 
 const POLLING_INTERVAL_MS = 8_000;
+const MAX_CUSTOM_INSTRUCTION_LENGTH = 6_000;
+const MAX_CUSTOM_OUTPUT_FIELDS = 20;
+let customFieldSequence = 0;
 const SourcePreviewDrawer = lazy(() => import("./source-preview-drawer"));
 
 function formatDate(value?: string): string {
@@ -93,6 +104,7 @@ function sourceRoleLabel(role: string): string {
     invoices: "Invoice",
     normalstundenPdfs: "Invoice",
     normalstundenArchive: "Invoice archive",
+    normalstundenArchivePdf: "Invoice from archive",
     contracts: "Contract",
     contract: "Contract",
     tenderDocuments: "Tender document",
@@ -126,6 +138,11 @@ function statusLabel(status: string): string {
 
 function initialOptions(workflow: WorkflowDefinition): Record<string, OptionValue> {
   return Object.fromEntries(workflow.options.map((option) => [option.id, option.defaultValue]));
+}
+
+function newCustomOutputField(): CustomOutputField {
+  customFieldSequence += 1;
+  return { id: `custom-field-${customFieldSequence}`, name: "", instruction: "", type: "text" };
 }
 
 function answerText(value: unknown): string {
@@ -657,6 +674,11 @@ function WorkflowSubmission({
   const [filesByInput, setFilesByInput] = useState<Record<string, File[]>>({});
   const [retention, setRetention] = useState<Retention>("temporary");
   const [options, setOptions] = useState<Record<string, OptionValue>>(() => initialOptions(workflow));
+  const [customInstructions, setCustomInstructions] = useState("");
+  const [standardOutputFields, setStandardOutputFields] = useState<string[]>(() =>
+    workflow.standardOutputFields.map((field) => field.id),
+  );
+  const [customOutputFields, setCustomOutputFields] = useState<CustomOutputField[]>([]);
   const [normalstundenSource, setNormalstundenSource] = useState<NormalstundenSource>("pdf");
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
@@ -667,6 +689,10 @@ function WorkflowSubmission({
 
   function updateOption(id: string, value: OptionValue): void {
     setOptions((current) => ({ ...current, [id]: value }));
+  }
+
+  function updateCustomField(id: string, update: Partial<Omit<CustomOutputField, "id">>): void {
+    setCustomOutputFields((current) => current.map((field) => field.id === id ? { ...field, ...update } : field));
   }
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -681,13 +707,33 @@ function WorkflowSubmission({
       setError(`Add the required file${missingInputs.length > 1 ? "s" : ""}: ${missingInputs.map((input) => input.label).join(", ")}.`);
       return;
     }
+    if (customOutputFields.some((field) => !field.name.trim())) {
+      setError("Give every custom output field a name or remove the empty field.");
+      return;
+    }
+    const normalizedNames = customOutputFields.map((field) => field.name.trim().toLowerCase());
+    if (new Set(normalizedNames).size !== normalizedNames.length) {
+      setError("Custom output field names must be unique.");
+      return;
+    }
 
     const files: SubmittedFile[] = inputs.flatMap((input) =>
       (filesByInput[input.id] ?? []).map((file) => ({ role: input.id, file })),
     );
-    const submittedOptions = workflow.normalstundenSelection
+    const submittedOptions: Record<string, unknown> = workflow.normalstundenSelection
       ? { ...options, inputMode: normalstundenSource }
-      : options;
+      : { ...options };
+    submittedOptions.standardOutputFields = standardOutputFields;
+    if (customInstructions.trim()) {
+      submittedOptions.customInstructions = customInstructions.trim();
+    }
+    if (customOutputFields.length > 0) {
+      submittedOptions.customOutputFields = customOutputFields.map(({ name, instruction, type }) => ({
+        name: name.trim(),
+        instruction: instruction.trim(),
+        type,
+      }));
+    }
 
     setSubmitting(true);
     onSubmittingChange(true);
@@ -784,6 +830,125 @@ function WorkflowSubmission({
             </div>
           </fieldset>
         ) : null}
+        <fieldset className="custom-analysis-panel">
+          <legend>Customize analysis</legend>
+          <p>Choose which standard results to include, then add any fields or instructions specific to this review. Fixed source-grounding and security rules remain active.</p>
+          <label className="field-label custom-instructions-field">
+            <span>Instruction prompt <small>Optional</small></span>
+            <textarea
+              value={customInstructions}
+              maxLength={MAX_CUSTOM_INSTRUCTION_LENGTH}
+              rows={5}
+              placeholder="Example: Focus on price-adjustment mechanisms, renewal deadlines, and obligations that require procurement action."
+              onChange={(event) => setCustomInstructions(event.target.value)}
+            />
+            <small>{customInstructions.length.toLocaleString()} / {MAX_CUSTOM_INSTRUCTION_LENGTH.toLocaleString()} characters</small>
+          </label>
+          <div className="custom-fields-heading standard-fields-heading">
+            <div>
+              <strong>Standard output fields</strong>
+              <small>Included by default. Remove any result that is not needed for this analysis.</small>
+            </div>
+            {standardOutputFields.length < workflow.standardOutputFields.length ? (
+              <button
+                className="secondary-button compact-button"
+                type="button"
+                disabled={submitting}
+                onClick={() => setStandardOutputFields(workflow.standardOutputFields.map((field) => field.id))}
+              >
+                Restore all
+              </button>
+            ) : null}
+          </div>
+          {standardOutputFields.length > 0 ? (
+            <div className="standard-field-list">
+              {workflow.standardOutputFields.filter((field) => standardOutputFields.includes(field.id)).map((field, index) => (
+                <div className="standard-field-row" key={field.id}>
+                  <span className="custom-field-index" aria-hidden="true">{index + 1}</span>
+                  <span className="standard-field-copy">
+                    <strong>{field.label}</strong>
+                    <small>{field.detail}</small>
+                  </span>
+                  <span className="standard-field-type">Standard</span>
+                  <button
+                    className="remove-custom-field"
+                    type="button"
+                    aria-label={`Remove standard field ${field.label}`}
+                    disabled={submitting}
+                    onClick={() => setStandardOutputFields((current) => current.filter((id) => id !== field.id))}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="custom-fields-empty">No standard business fields selected. Status, source provenance, and validation messages will still be shown.</p>
+          )}
+          <div className="custom-fields-heading extra-fields-heading">
+            <div>
+              <strong>Additional output fields</strong>
+              <small>Add up to {MAX_CUSTOM_OUTPUT_FIELDS} named fields. These appear in a separate Customized output section.</small>
+            </div>
+            <button
+              className="secondary-button compact-button"
+              type="button"
+              disabled={submitting || customOutputFields.length >= MAX_CUSTOM_OUTPUT_FIELDS}
+              onClick={() => setCustomOutputFields((current) => [...current, newCustomOutputField()])}
+            >
+              Add field
+            </button>
+          </div>
+          {customOutputFields.length > 0 ? (
+            <div className="custom-field-list">
+              {customOutputFields.map((field, index) => (
+                <div className="custom-field-row" key={field.id}>
+                  <span className="custom-field-index" aria-hidden="true">{index + 1}</span>
+                  <label className="field-label">
+                    <span>Field name</span>
+                    <input
+                      type="text"
+                      value={field.name}
+                      maxLength={80}
+                      placeholder="Termination notice period"
+                      onChange={(event) => updateCustomField(field.id, { name: event.target.value })}
+                    />
+                  </label>
+                  <label className="field-label">
+                    <span>Output type</span>
+                    <select value={field.type} onChange={(event) => updateCustomField(field.id, { type: event.target.value as CustomOutputType })}>
+                      <option value="text">Text</option>
+                      <option value="number">Number</option>
+                      <option value="yes_no">Yes / No</option>
+                      <option value="list">List</option>
+                    </select>
+                  </label>
+                  <label className="field-label custom-field-instruction">
+                    <span>Field instructions <small>Optional</small></span>
+                    <input
+                      type="text"
+                      value={field.instruction}
+                      maxLength={500}
+                      placeholder="What should be extracted and how should it be interpreted?"
+                      onChange={(event) => updateCustomField(field.id, { instruction: event.target.value })}
+                    />
+                  </label>
+                  <button
+                    className="remove-custom-field"
+                    type="button"
+                    aria-label={`Remove custom field ${index + 1}`}
+                    disabled={submitting}
+                    onClick={() => setCustomOutputFields((current) => current.filter((item) => item.id !== field.id))}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="custom-fields-empty">No additional fields requested.</p>
+          )}
+        </fieldset>
         <fieldset className="retention-panel">
           <legend>Retention</legend>
           <p>Source documents are retained with the analysis so evidence references can be reviewed later.</p>
@@ -1173,6 +1338,12 @@ function JobDetails({
     }
   }
 
+  const jobWorkflow = workflowById(job.workflow);
+  const selectedStandardFields = job.customization?.standardOutputFields?.flatMap((id) => {
+    const field = jobWorkflow?.standardOutputFields.find((candidate) => candidate.id === id);
+    return field ? [field] : [];
+  });
+
   return (
     <div className="detail-stack result-workspace-detail">
       <div className="detail-header result-detail-header">
@@ -1194,7 +1365,6 @@ function JobDetails({
                 <p className="eyebrow">Consultant review</p>
                 <h3>Analysis findings</h3>
               </div>
-                <p>Structured for business review with source-level evidence where the analysis provides a grounded reference.</p>
             </div>
             {loading ? <p className="empty-state">Refreshing job status...</p> : null}
             {!loading && job.result === undefined ? <p className="empty-state">Results will appear here when this job completes.</p> : null}
@@ -1225,6 +1395,44 @@ function JobDetails({
               <h3>Coverage and limitations</h3>
               <ul>{job.coverage.map((note) => <li key={note}>{note}</li>)}</ul>
             </section>
+          ) : null}
+          {job.customization ? (
+            <details className="result-context-section customization-details">
+              <summary>Output configuration</summary>
+              {job.customization.standardOutputFields ? (
+                <div>
+                  <strong>Included standard fields</strong>
+                  {selectedStandardFields && selectedStandardFields.length > 0 ? (
+                    <ul>
+                      {selectedStandardFields.map((field) => (
+                        <li key={field.id}><span>{field.label}</span></li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>No optional standard business fields were included.</p>
+                  )}
+                </div>
+              ) : null}
+              {job.customization.instructions ? (
+                <div className="customization-instructions">
+                  <strong>Instruction prompt</strong>
+                  <p>{job.customization.instructions}</p>
+                </div>
+              ) : null}
+              {job.customization.outputFields.length > 0 ? (
+                <div>
+                  <strong>Requested output fields</strong>
+                  <ul>
+                    {job.customization.outputFields.map((field) => (
+                      <li key={`${field.name}-${field.type}`}>
+                        <span>{field.name}</span>
+                        <small>{field.type.replace("yes_no", "yes / no")}{field.instruction ? ` / ${field.instruction}` : ""}</small>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </details>
           ) : null}
           {job.sources.length > 0 ? (
             <section className="result-context-section">

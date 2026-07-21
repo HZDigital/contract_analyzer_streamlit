@@ -193,6 +193,7 @@ def expand_normalstunden_archive(data: bytes, settings: Settings, include_subfol
         raise _bad_request("The Normalstunden archive is not a valid ZIP file.") from exc
 
     uploads: list[ValidatedUpload] = []
+    upload_names: set[str] = set()
     uncompressed_size = 0
     with archive:
         infos = archive.infolist()
@@ -211,6 +212,10 @@ def expand_normalstunden_archive(data: bytes, settings: Settings, include_subfol
                 raise _bad_request(f"{path.name} exceeds the per-file upload limit.")
             if not include_subfolders and len(path.parts) > 1:
                 continue
+            normalized_name = path.name.casefold()
+            if normalized_name in upload_names:
+                raise _bad_request("Normalstunden ZIP archives cannot contain duplicate PDF filenames.")
+            upload_names.add(normalized_name)
             member = archive.read(info)
             supplier_hint = "" if path.parent == PurePosixPath(".") else path.parent.as_posix()
             uploads.append(

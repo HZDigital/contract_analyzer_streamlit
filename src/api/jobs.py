@@ -14,11 +14,16 @@ from fastapi import HTTPException, status
 
 from src.utils.large_contract_analyzer import answer_contract_question
 
+from .customization import (
+    CustomizationValidationError,
+    normalize_customization_options,
+    standard_output_fields_from_options,
+)
 from .public_results import curate_public_result
-from .schemas import CurrentUser, FileRole, JobRecord, JobSource, utc_now
+from .schemas import CurrentUser, FileRole, InputReference, JobRecord, JobSource, utc_now
 from .settings import Settings
 from .storage import BlobJobStorage, JobLease, JobNotFoundError, StorageNotConfiguredError
-from .uploads import ValidatedUpload
+from .uploads import ValidatedUpload, expand_normalstunden_archive
 from .workflows import STANDARD_CONTRACT_CHARACTER_LIMIT, WorkflowInput, run_workflow
 
 
@@ -57,6 +62,10 @@ class JobService:
             retention_days = 60
         else:
             retention_days = None
+        try:
+            options = normalize_customization_options(options, workflow)
+        except CustomizationValidationError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         if workflow == "detailed_contract":
             options = {
                 key: value
@@ -266,13 +275,18 @@ class JobDispatcher:
                     if job.sources:
                         retained_sources = list(job.sources)
                     else:
-                        for reference, data in loaded_inputs:
+                        try:
+                            retained_uploads = _retained_source_uploads(job, loaded_inputs, self.settings)
+                        except HTTPException:
+                            workflow_failed = True
+                            raise
+                        for upload in retained_uploads:
                             retained_sources.append(
                                 self.storage.save_source(
                                     job,
-                                    name=reference.name,
-                                    role=reference.role,
-                                    data=data,
+                                    name=upload.name,
+                                    role=upload.role,
+                                    data=upload.data,
                                 )
                             )
                         job.sources = list(retained_sources)
@@ -299,13 +313,14 @@ class JobDispatcher:
                         # This can only occur for an interrupted rollout or a
                         # malformed private checkpoint. Rebuild source staging
                         # while the original inputs are still recoverable.
-                        for reference, data in self.storage.load_inputs(job):
+                        loaded_inputs = self.storage.load_inputs(job)
+                        for upload in _retained_source_uploads(job, loaded_inputs, self.settings):
                             retained_sources.append(
                                 self.storage.save_source(
                                     job,
-                                    name=reference.name,
-                                    role=reference.role,
-                                    data=data,
+                                    name=upload.name,
+                                    role=upload.role,
+                                    data=upload.data,
                                 )
                             )
                         job.sources = list(retained_sources)
@@ -328,7 +343,11 @@ class JobDispatcher:
                     )
                     for index, artifact in enumerate(outcome.artifacts)
                 ]
-                job.result = curate_public_result(job.workflow, result)
+                job.result = curate_public_result(
+                    job.workflow,
+                    result,
+                    standard_output_fields_from_options(job.workflow, job.options),
+                )
                 display_fields = result.get("_display_fields")
                 if isinstance(display_fields, list):
                     # Keep the template-derived allow-list private so repeated
@@ -454,3 +473,49 @@ class JobDispatcher:
             self.storage.delete_outcome(job)
         except Exception:  # noqa: BLE001
             logger.warning("Unable to remove analyzer workflow checkpoint: %s", job.id)
+
+
+def _retained_source_uploads(
+    job: JobRecord,
+    loaded_inputs: list[tuple[InputReference, bytes]],
+    settings: Settings,
+) -> list[ValidatedUpload]:
+    """Include previewable PDFs expanded from a Normalstunden ZIP as retained sources."""
+
+    retained = [
+        ValidatedUpload(
+            name=reference.name,
+            role=reference.role,
+            content_type=reference.content_type,
+            data=data,
+            supplier_hint=reference.supplier_hint,
+        )
+        for reference, data in loaded_inputs
+    ]
+    if job.workflow != "normalstunden":
+        return retained
+
+    include_subfolders = _option_bool(job.options, "includeSubfolders", "include_subfolders", True)
+    for reference, data in loaded_inputs:
+        if reference.role != "normalstundenArchive":
+            continue
+        retained.extend(
+            ValidatedUpload(
+                name=member.name,
+                role="normalstundenArchivePdf",
+                content_type=member.content_type,
+                data=member.data,
+                supplier_hint=member.supplier_hint,
+            )
+            for member in expand_normalstunden_archive(data, settings, include_subfolders)
+        )
+    return retained
+
+
+def _option_bool(options: dict[str, Any], camel_name: str, snake_name: str, default: bool) -> bool:
+    """Match workflow option parsing when retained sources are derived from inputs."""
+
+    value = options.get(camel_name, options.get(snake_name, default))
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(value)

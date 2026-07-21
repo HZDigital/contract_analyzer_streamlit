@@ -41,4 +41,13 @@ describe("analysis module catalog", () => {
     expect(workflowTitle("tender")).toBe("Tender");
     expect(workflowTitle("future_workflow")).toBe("future workflow");
   });
+
+  it("defines removable standard output fields for every active workflow", () => {
+    for (const workflow of workflows) {
+      expect(workflow.standardOutputFields.length).toBeGreaterThan(0);
+      expect(new Set(workflow.standardOutputFields.map((field) => field.id)).size).toBe(workflow.standardOutputFields.length);
+    }
+    expect(workflowById("detailed_contract")?.standardOutputFields.map((field) => field.id)).toContain("risk_areas");
+    expect(workflowById("invoice")?.standardOutputFields.map((field) => field.id)).toContain("products");
+  });
 });

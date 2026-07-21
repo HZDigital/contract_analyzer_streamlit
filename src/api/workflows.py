@@ -34,7 +34,8 @@ from src.utils.ai_analyzer import (
     extract_client_and_products_from_invoices,
     group_similar_products,
 )
-from src.utils.invoice_normalstunden_extractor import extract_normalstunden_from_bytes
+from src.utils.custom_analysis import analyze_custom_output, merge_custom_outputs
+from src.utils.invoice_normalstunden_extractor import extract_normalstunden_from_text
 from src.utils.large_contract_analyzer import (
     analyze_contract_chunks,
     build_contract_chunks,
@@ -48,6 +49,7 @@ from src.utils.pdf_processor import (
 )
 from src.utils.web_research import analyze_market_situation
 
+from .customization import customization_from_options, standard_output_fields_from_options
 from .public_results import curate_public_result
 from .settings import get_settings
 from .uploads import expand_normalstunden_archive
@@ -143,6 +145,7 @@ def run_workflow(
 def _run_product_request(
     files: list[WorkflowInput], options: Mapping[str, Any], progress: ProgressCallback
 ) -> WorkflowResult:
+    customization = customization_from_options(options)
     results: list[dict[str, Any]] = []
     total = len(files)
     for index, file in enumerate(files, 1):
@@ -162,19 +165,19 @@ def _run_product_request(
                     }
                 )
             else:
-                results.append(
-                    {
-                        "file_name": file.name,
-                        "status": "success",
-                        "client_name": extracted.get("client_name", "Not detected"),
-                        "products": [
-                            _select_fields(product, "product_name", "quantity", "unit", "description")
-                            for product in _dict_list(extracted.get("products"))
-                        ],
-                        "contract_type": extracted.get("contract_type", "Unknown"),
-                        "total_estimated_value": extracted.get("total_estimated_value", "Not specified"),
-                    }
-                )
+                document = {
+                    "file_name": file.name,
+                    "status": "success",
+                    "client_name": extracted.get("client_name", "Not detected"),
+                    "products": [
+                        _select_fields(product, "product_name", "quantity", "unit", "description")
+                        for product in _dict_list(extracted.get("products"))
+                    ],
+                    "contract_type": extracted.get("contract_type", "Unknown"),
+                    "total_estimated_value": extracted.get("total_estimated_value", "Not specified"),
+                }
+                _attach_custom_analysis(document, text, customization, source_files=[file.name])
+                results.append(document)
         except Exception as exc:  # noqa: BLE001
             results.append({"file_name": file.name, "status": "failed", "products": [], "error": _safe_document_error(exc)})
         progress(_file_progress(index, total, 5, 70), f"Processed {file.name}")
@@ -208,21 +211,28 @@ def _run_product_request(
         "consolidated_products": consolidated,
         "warnings": warnings,
     }
+    standard_output_fields = standard_output_fields_from_options("product_request", options)
+    public_payload = curate_public_result("product_request", payload, standard_output_fields)
+    public_results = _dict_list(public_payload.get("results"))
     artifacts = [
-        _json_artifact("product_request_results.json", payload),
+        _json_artifact(
+            "product_request_results.json",
+            public_payload,
+            standard_output_fields=standard_output_fields,
+        ),
         WorkflowArtifact(
-            data=_csv_bytes(_product_export_rows(results)),
+            data=_csv_bytes(_product_export_rows(public_results)),
             name="product_request_results.csv",
             content_type="text/csv; charset=utf-8",
         ),
     ]
-    return WorkflowResult(_normalize_json(payload), artifacts)
+    return WorkflowResult(_normalize_json(public_payload), artifacts)
 
 
 def _run_invoice(
     files: list[WorkflowInput], options: Mapping[str, Any], progress: ProgressCallback
 ) -> WorkflowResult:
-    del options
+    customization = customization_from_options(options)
     results: list[dict[str, Any]] = []
     total = len(files)
     for index, file in enumerate(files, 1):
@@ -242,21 +252,27 @@ def _run_invoice(
                     }
                 )
             else:
-                results.append(
-                    {
-                        "file_name": file.name,
-                        "status": "success",
-                        **_invoice_fields(extracted),
-                    }
-                )
+                document = {
+                    "file_name": file.name,
+                    "status": "success",
+                    **_invoice_fields(extracted),
+                }
+                _attach_custom_analysis(document, text, customization, source_files=[file.name])
+                results.append(document)
         except Exception as exc:  # noqa: BLE001
             results.append({"file_name": file.name, "status": "failed", "products": [], "error": _safe_document_error(exc)})
         progress(_file_progress(index, total, 5, 80), f"Processed {file.name}")
 
-    rows = _invoice_export_rows(results)
     payload = {"workflow": "invoice", "summary": _summary(results), "results": results}
+    standard_output_fields = standard_output_fields_from_options("invoice", options)
+    public_payload = curate_public_result("invoice", payload, standard_output_fields)
+    rows = _invoice_export_rows(_dict_list(public_payload.get("results")))
     artifacts = [
-        _json_artifact("invoice_results.json", payload),
+        _json_artifact(
+            "invoice_results.json",
+            public_payload,
+            standard_output_fields=standard_output_fields,
+        ),
         WorkflowArtifact(_csv_bytes(rows), "invoice_results.csv", "text/csv; charset=utf-8"),
         WorkflowArtifact(
             _xlsx_bytes(rows, "Invoices"),
@@ -264,12 +280,13 @@ def _run_invoice(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ),
     ]
-    return WorkflowResult(_normalize_json(payload), artifacts)
+    return WorkflowResult(_normalize_json(public_payload), artifacts)
 
 
 def _run_normalstunden(
     files: list[WorkflowInput], options: Mapping[str, Any], progress: ProgressCallback
 ) -> WorkflowResult:
+    customization = customization_from_options(options)
     pdf_files = _normalstunden_pdf_inputs(files, options)
     hints = _as_mapping(options.get("supplierHints", options.get("supplier_hints", {})))
     default_hint = str(options.get("supplierHint", options.get("supplier_hint", ""))).strip()
@@ -279,7 +296,11 @@ def _run_normalstunden(
         progress(_file_progress(index - 1, total, 5, 85), f"Extracting Normalstunden from {file.name}")
         supplier_hint = str(hints.get(file.name) or file.supplier_hint or default_hint).strip()
         try:
-            results.append(extract_normalstunden_from_bytes(file.data, file.name, supplier_hint))
+            text = extract_text_from_pdf(file.data)
+            document = extract_normalstunden_from_text(text, file.name, supplier_hint)
+            if document.get("status") != "failed":
+                _attach_custom_analysis(document, text, customization, source_files=[file.name])
+            results.append(document)
         except Exception as exc:  # noqa: BLE001
             results.append(
                 {
@@ -298,10 +319,17 @@ def _run_normalstunden(
             )
         progress(_file_progress(index, total, 5, 85), f"Processed {file.name}")
 
-    rows = _normalstunden_export_rows(results)
     payload = {"workflow": "normalstunden", "summary": _summary(results), "results": results}
+    standard_output_fields = standard_output_fields_from_options("normalstunden", options)
+    public_payload = curate_public_result("normalstunden", payload, standard_output_fields)
+    public_results = _dict_list(public_payload.get("results"))
+    rows = _normalstunden_export_rows(public_results)
     artifacts = [
-        _json_artifact("normalstunden_results.json", payload),
+        _json_artifact(
+            "normalstunden_results.json",
+            public_payload,
+            standard_output_fields=standard_output_fields,
+        ),
         WorkflowArtifact(_csv_bytes(rows), "normalstunden_results.csv", "text/csv; charset=utf-8"),
         WorkflowArtifact(
             _xlsx_bytes(rows, "Normalstunden"),
@@ -309,12 +337,13 @@ def _run_normalstunden(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ),
     ]
-    return WorkflowResult(_normalize_json(payload), artifacts)
+    return WorkflowResult(_normalize_json(public_payload), artifacts)
 
 
 def _run_detailed_contract(
-    files: list[WorkflowInput], _options: Mapping[str, Any], progress: ProgressCallback
+    files: list[WorkflowInput], options: Mapping[str, Any], progress: ProgressCallback
 ) -> WorkflowResult:
+    customization = customization_from_options(options)
     results: list[dict[str, Any]] = []
     total = len(files)
     for index, file in enumerate(files, 1):
@@ -335,11 +364,13 @@ def _run_detailed_contract(
                     }
                 )
             else:
+                curated = _curated_analysis("detailed_contract", analysis)
+                _attach_custom_analysis(curated, text, customization, source_files=[file.name])
                 results.append(
                     {
                         "file_name": file.name,
                         "status": "success",
-                        "analysis": _curated_analysis("detailed_contract", analysis),
+                        "analysis": curated,
                     }
                 )
         except Exception as exc:  # noqa: BLE001
@@ -351,20 +382,27 @@ def _run_detailed_contract(
         progress(_file_progress(index, total, 5, 85), f"Analyzed {file.name}")
 
     payload = {"workflow": "detailed_contract", "summary": _summary(results), "results": results}
+    standard_output_fields = standard_output_fields_from_options("detailed_contract", options)
+    public_payload = curate_public_result("detailed_contract", payload, standard_output_fields)
+    public_results = _dict_list(public_payload.get("results"))
     artifacts = [
-        _json_artifact("detailed_contract_results.json", payload),
+        _json_artifact(
+            "detailed_contract_results.json",
+            public_payload,
+            standard_output_fields=standard_output_fields,
+        ),
         WorkflowArtifact(
-            _csv_bytes(_detailed_export_rows(results)),
+            _csv_bytes(_detailed_export_rows(public_results)),
             "detailed_contract_results.csv",
             "text/csv; charset=utf-8",
         ),
         WorkflowArtifact(
-            _detailed_markdown(results).encode("utf-8"),
+            _detailed_markdown(public_results).encode("utf-8"),
             "detailed_contract_report.md",
             "text/markdown; charset=utf-8",
         ),
     ]
-    return WorkflowResult(_normalize_json(payload), artifacts)
+    return WorkflowResult(_normalize_json(public_payload), artifacts)
 
 
 def _run_tender(
@@ -453,6 +491,7 @@ def _run_tender(
 def _run_cooperation_review(
     files: list[WorkflowInput], options: Mapping[str, Any], progress: ProgressCallback
 ) -> WorkflowResult:
+    customization = customization_from_options(options)
     suppliers = _files_for_role(files, "supplierAgreements")
     standards = _files_for_role(files, "standardContract")
     if not suppliers or len(standards) != 1:
@@ -460,17 +499,19 @@ def _run_cooperation_review(
 
     progress(5, f"Extracting standard contract {standards[0].name}")
     standard_text = extract_text_from_file(standards[0].data, standards[0].name)
-    supplier_texts: list[str] = []
+    supplier_sources: dict[str, str] = {}
     total = len(suppliers)
     for index, file in enumerate(suppliers, 1):
         progress(_file_progress(index - 1, total, 10, 55), f"Extracting {file.name}")
-        supplier_texts.append(f"=== {file.name} ===\n{extract_text_from_file(file.data, file.name)}")
+        supplier_sources[file.name] = extract_text_from_file(file.data, file.name)
         progress(_file_progress(index, total, 10, 55), f"Processed {file.name}")
 
     progress(60, "Comparing cooperation agreements")
     analysis = _json_mapping(
         compare_contracts(
-            "\n\n--- Document Separator ---\n\n".join(supplier_texts),
+            "\n\n--- Document Separator ---\n\n".join(
+                f"=== {name} ===\n{text}" for name, text in supplier_sources.items()
+            ),
             standard_text,
             truncate_length=_optional_positive_int(options.get("truncateLength", options.get("truncate_length"))) or 12000,
             include_risk_assessment=_option_bool(options, "includeRiskAssessment", "include_risk_assessment", default=True),
@@ -481,32 +522,45 @@ def _run_cooperation_review(
     if analysis.get("error"):
         raise RuntimeError("The analysis service could not compare the supplied agreements.")
     analysis = _curated_analysis("cooperation_review", analysis)
+    custom_analysis = analyze_custom_output(
+        customization,
+        source_texts={standards[0].name: standard_text, **supplier_sources},
+    )
     payload = {
         "workflow": "cooperation_review",
         "standard_contract": standards[0].name,
         "supplier_agreements": [file.name for file in suppliers],
         "analysis": analysis,
     }
+    if custom_analysis is not None:
+        payload["custom_analysis"] = custom_analysis
+    standard_output_fields = standard_output_fields_from_options("cooperation_review", options)
+    public_payload = curate_public_result("cooperation_review", payload, standard_output_fields)
+    public_analysis = _json_mapping(public_payload.get("analysis"))
     artifacts = [
-        _json_artifact("cooperation_review.json", payload),
+        _json_artifact(
+            "cooperation_review.json",
+            public_payload,
+            standard_output_fields=standard_output_fields,
+        ),
         WorkflowArtifact(
-            _csv_bytes(_cooperation_export_rows(analysis)),
+            _csv_bytes(_cooperation_export_rows(public_analysis)),
             "cooperation_review.csv",
             "text/csv; charset=utf-8",
         ),
         WorkflowArtifact(
-            _analysis_markdown("Cooperation Review", analysis).encode("utf-8"),
+            _analysis_markdown("Cooperation Review", public_analysis).encode("utf-8"),
             "cooperation_review.md",
             "text/markdown; charset=utf-8",
         ),
     ]
-    return WorkflowResult(_normalize_json(payload), artifacts)
+    return WorkflowResult(_normalize_json(public_payload), artifacts)
 
 
 def _run_factory_certificate(
     files: list[WorkflowInput], options: Mapping[str, Any], progress: ProgressCallback
 ) -> WorkflowResult:
-    del options
+    customization = customization_from_options(options)
     texts: dict[str, str] = {}
     extraction_errors: list[dict[str, str]] = []
     total = len(files)
@@ -528,15 +582,25 @@ def _run_factory_certificate(
     if analysis.get("error"):
         raise RuntimeError("The analysis service could not compare the supplied quality documents.")
     analysis = _curated_analysis("factory_certificate", analysis)
-    rows = _dict_list(analysis.get("comparisons"))
     payload = {
         "workflow": "factory_certificate",
         "source_files": list(texts),
         "extraction_errors": extraction_errors,
         "analysis": analysis,
     }
+    custom_analysis = analyze_custom_output(customization, source_texts=texts)
+    if custom_analysis is not None:
+        payload["custom_analysis"] = custom_analysis
+    standard_output_fields = standard_output_fields_from_options("factory_certificate", options)
+    public_payload = curate_public_result("factory_certificate", payload, standard_output_fields)
+    public_analysis = _json_mapping(public_payload.get("analysis"))
+    rows = _dict_list(public_analysis.get("comparisons"))
     artifacts = [
-        _json_artifact("factory_certificate_results.json", payload),
+        _json_artifact(
+            "factory_certificate_results.json",
+            public_payload,
+            standard_output_fields=standard_output_fields,
+        ),
         WorkflowArtifact(_csv_bytes(rows), "factory_certificate_results.csv", "text/csv; charset=utf-8"),
         WorkflowArtifact(
             _xlsx_bytes(rows, "Comparison"),
@@ -544,12 +608,13 @@ def _run_factory_certificate(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ),
     ]
-    return WorkflowResult(_normalize_json(payload), artifacts)
+    return WorkflowResult(_normalize_json(public_payload), artifacts)
 
 
 def _run_large_scanner(
     files: list[WorkflowInput], options: Mapping[str, Any], progress: ProgressCallback
 ) -> WorkflowResult:
+    customization = customization_from_options(options)
     contracts = _files_for_role(files, "contract")
     if len(contracts) != 1:
         raise ValueError("Large scanner requires exactly one contract PDF.")
@@ -589,6 +654,20 @@ def _run_large_scanner(
     progress(80, "Merging contract evidence")
     merged = merge_chunk_findings(chunk_results, chunks)
     report = synthesize_contract_analysis(merged, is_complete_document=complete)
+    custom_analysis = None
+    if customization is not None:
+        progress(85, "Generating customized output")
+        custom_outputs = []
+        for index, chunk in enumerate(chunks, 1):
+            custom_outputs.append(
+                analyze_custom_output(
+                    customization,
+                    source_texts={contract.name: str(chunk.get("text", ""))},
+                    page_aware=True,
+                )
+            )
+            progress(_file_progress(index, len(chunks), 85, 96), f"Customized section {index}/{len(chunks)}")
+        custom_analysis = merge_custom_outputs(custom_outputs)
     qa_context = {"version": 1, "chunks": chunks, "merged": merged}
     payload = {
         "workflow": "large_scanner",
@@ -601,14 +680,28 @@ def _run_large_scanner(
         # Later jobs use this durable context with answer_contract_question.
         "qa_context": qa_context,
     }
+    if custom_analysis is not None:
+        payload["custom_analysis"] = custom_analysis
+    standard_output_fields = standard_output_fields_from_options("large_scanner", options)
+    public_payload = curate_public_result("large_scanner", payload, standard_output_fields)
     artifacts = [
-        WorkflowArtifact(
-            str(report).encode("utf-8"),
-            "large_contract_scanner_report.md",
-            "text/markdown; charset=utf-8",
+        _json_artifact(
+            "large_contract_scanner_evidence.json",
+            public_payload,
+            standard_output_fields=standard_output_fields,
         ),
-        _json_artifact("large_contract_scanner_evidence.json", payload),
     ]
+    if "report" in standard_output_fields:
+        artifacts.insert(
+            0,
+            WorkflowArtifact(
+                str(report).encode("utf-8"),
+                "large_contract_scanner_report.md",
+                "text/markdown; charset=utf-8",
+            ),
+        )
+    # The dispatcher removes and stores qa_context privately before publishing
+    # the selected public fields.
     return WorkflowResult(_normalize_json(payload), artifacts)
 
 
@@ -855,18 +948,15 @@ def _product_export_rows(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for result in results:
         products = _dict_list(result.get("products"))
+        base = {
+            key: value
+            for key, value in result.items()
+            if key not in {"products", "custom_analysis"}
+        }
         if not products:
-            rows.append(
-                {
-                    "file_name": result.get("file_name"),
-                    "status": result.get("status"),
-                    "client_name": result.get("client_name", ""),
-                    "contract_type": result.get("contract_type", ""),
-                    "error": result.get("error", ""),
-                }
-            )
+            rows.append(base)
         for product in products:
-            rows.append({**result, **product, "products": None})
+            rows.append({**base, **product})
     return rows
 
 
@@ -886,28 +976,15 @@ def _normalstunden_export_rows(results: list[dict[str, Any]]) -> list[dict[str, 
     rows: list[dict[str, Any]] = []
     for result in results:
         entries = _dict_list(result.get("entries"))
+        base = {
+            key: value
+            for key, value in result.items()
+            if key not in {"entries", "custom_analysis"}
+        }
         if entries:
-            for entry in entries:
-                rows.append(
-                    {
-                        "file_name": result.get("file_name", ""),
-                        "supplier": result.get("supplier", ""),
-                        "hours": entry.get("hours_display", entry.get("hours", "")),
-                        "hourly_rate": entry.get("hourly_rate_display", entry.get("hourly_rate", "")),
-                        "status": result.get("status", ""),
-                    }
-                )
+            rows.extend({**base, **entry} for entry in entries)
         else:
-            rows.append(
-                {
-                    "file_name": result.get("file_name", ""),
-                    "supplier": result.get("supplier", ""),
-                    "hours": result.get("hours_total", ""),
-                    "hourly_rate": result.get("hourly_rate_display", ""),
-                    "status": result.get("status", ""),
-                    "error": result.get("error", ""),
-                }
-            )
+            rows.append(base)
     return rows
 
 
@@ -918,13 +995,14 @@ def _detailed_export_rows(results: list[dict[str, Any]]) -> list[dict[str, Any]]
         base = {
             "file_name": result.get("file_name", ""),
             "status": result.get("status", ""),
-            "client_name": analysis.get("client_name", ""),
-            "contract_type": analysis.get("contract_type", ""),
-            "start_date": analysis.get("start_date", ""),
-            "end_date": analysis.get("end_date", ""),
-            "summary": analysis.get("summary", ""),
-            "error": result.get("error", analysis.get("error", "")),
+            **{
+                key: value
+                for key, value in analysis.items()
+                if key not in {"products_services", "custom_analysis"}
+            },
         }
+        if result.get("error"):
+            base["error"] = result["error"]
         products = _dict_list(analysis.get("products_services"))
         rows.extend({**base, **product} for product in products) if products else rows.append(base)
     return rows
@@ -951,9 +1029,12 @@ def _detailed_markdown(results: list[dict[str, Any]]) -> str:
             sections.append(f"\nError: {result.get('error', 'Analysis failed')}")
             continue
         analysis = _json_mapping(result.get("analysis"))
-        sections.append(str(analysis.get("summary", "No summary available")))
-        if analysis.get("risk_areas"):
-            sections.append("\n### Risk Areas\n" + _json_text(analysis["risk_areas"]))
+        for key, value in analysis.items():
+            if key == "custom_analysis":
+                continue
+            heading = key.replace("_", " ").title()
+            body = value if isinstance(value, str) else _json_text(value)
+            sections.append(f"\n### {heading}\n{body}")
     return "\n".join(sections).strip() + "\n"
 
 
@@ -971,6 +1052,23 @@ def _tender_markdown(merged: Mapping[str, Any]) -> str:
     lines.append("## Extracted Fields")
     lines.extend(f"- **{field}:** {_cell_text(value)}" for field, value in values.items())
     return "\n".join(lines) + "\n"
+
+
+def _attach_custom_analysis(
+    target: dict[str, Any],
+    text: str,
+    customization: Mapping[str, Any] | None,
+    *,
+    source_files: list[str],
+    page_aware: bool = False,
+) -> None:
+    custom_analysis = analyze_custom_output(
+        customization,
+        source_texts={source_file: text for source_file in source_files},
+        page_aware=page_aware,
+    )
+    if custom_analysis is not None:
+        target["custom_analysis"] = custom_analysis
 
 
 def _select_fields(value: Mapping[str, Any], *fields: str) -> dict[str, Any]:
@@ -1073,9 +1171,18 @@ def _analysis_error_message(analysis: Mapping[str, Any]) -> str:
     )
 
 
-def _json_artifact(name: str, value: Any) -> WorkflowArtifact:
+def _json_artifact(
+    name: str,
+    value: Any,
+    *,
+    standard_output_fields: Iterable[str] | None = None,
+) -> WorkflowArtifact:
     workflow = str(value.get("workflow", "")) if isinstance(value, Mapping) else ""
-    public_value = curate_public_result(workflow, value) if workflow else value
+    public_value = (
+        curate_public_result(workflow, value, standard_output_fields)
+        if workflow
+        else value
+    )
     return WorkflowArtifact(_json_bytes(public_value), name, "application/json")
 
 

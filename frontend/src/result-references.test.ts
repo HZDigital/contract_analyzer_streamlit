@@ -48,6 +48,7 @@ describe("result references", () => {
 
   it("parses only positive page references", () => {
     expect(parsePageRange("p. 4 to 6")).toEqual({ page: 4, pageEnd: 6 });
+    expect(parsePageRange("Pages 6 to 4")).toEqual({});
     expect(parsePageRange("appendix")).toEqual({});
   });
 });

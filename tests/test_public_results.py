@@ -101,3 +101,113 @@ def test_unknown_workflow_never_exposes_arbitrary_result_data() -> None:
     result = curate_public_result("future_workflow", {"debug": "private", "value": 42})
 
     assert result == {"notice": "This analysis result is not available in this application version."}
+
+
+def test_custom_analysis_exposes_only_declared_business_output_shape() -> None:
+    result = curate_public_result(
+        "detailed_contract",
+        {
+            "results": [
+                {
+                    "file_name": "agreement.pdf",
+                    "status": "success",
+                    "analysis": {
+                        "summary": "Standard result",
+                        "custom_analysis": {
+                            "summary": "Focus result",
+                            "debug": "private model data",
+                            "fields": [
+                                {
+                                    "key": "field_1",
+                                    "field": "Notice period",
+                                    "type": "text",
+                                    "value": "30 days",
+                                    "quote": "Thirty days' notice is required.",
+                                    "unexpected": "private",
+                                }
+                            ],
+                        },
+                    },
+                }
+            ]
+        },
+    )
+
+    custom = result["results"][0]["analysis"]["custom_analysis"]
+    assert custom["summary"] == "Focus result"
+    assert custom["fields"] == [
+        {
+            "field": "Notice period",
+            "type": "text",
+            "value": "30 days",
+            "quote": "Thirty days' notice is required.",
+        }
+    ]
+    assert "private" not in str(custom)
+
+
+def test_standard_output_selection_removes_unwanted_business_fields() -> None:
+    result = curate_public_result(
+        "invoice",
+        {
+            "summary": {"total": 1, "successful": 1, "failed": 0},
+            "results": [
+                {
+                    "file_name": "invoice.pdf",
+                    "status": "success",
+                    "invoice_number": "INV-42",
+                    "total_amount": "120.00",
+                    "supplier_name": "Supplier GmbH",
+                    "supplier_address": "Main Street",
+                    "products": [{"product_name": "Service", "line_total": "120.00"}],
+                }
+            ],
+        },
+        ["invoice_number", "supplier"],
+    )
+
+    assert result["summary"] == {"total": 1, "successful": 1, "failed": 0}
+    assert result["results"] == [
+        {
+            "file_name": "invoice.pdf",
+            "status": "success",
+            "invoice_number": "INV-42",
+            "supplier_name": "Supplier GmbH",
+            "supplier_address": "Main Street",
+        }
+    ]
+
+
+def test_empty_standard_selection_keeps_custom_output_and_provenance() -> None:
+    result = curate_public_result(
+        "detailed_contract",
+        {
+            "results": [
+                {
+                    "file_name": "agreement.pdf",
+                    "status": "success",
+                    "analysis": {
+                        "summary": "Remove me",
+                        "risk_areas": [{"concern": "Remove me too"}],
+                        "custom_analysis": {
+                            "fields": [{"field": "Business owner", "type": "text", "value": None}],
+                        },
+                    },
+                }
+            ]
+        },
+        [],
+    )
+
+    assert result["results"] == [
+        {
+            "file_name": "agreement.pdf",
+            "status": "success",
+            "analysis": {
+                "custom_analysis": {
+                    "findings": [],
+                    "fields": [{"field": "Business owner", "type": "text", "value": None}],
+                }
+            },
+        }
+    ]

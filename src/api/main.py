@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .auth import get_current_user
+from .customization import CustomizationValidationError, normalize_customization_options
 from .jobs import JobDispatcher, JobService
 from .schemas import CurrentUser, QuestionRequest, QuestionResponse
 from .settings import Settings, get_settings
@@ -95,7 +96,10 @@ async def create_job(
     service: JobService = Depends(get_job_service),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    options = _json_object(options_raw, "options")
+    try:
+        options = normalize_customization_options(_json_object(options_raw, "options"), workflow)
+    except CustomizationValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     if metadata_raw is not None:
         # Metadata is currently client-side bookkeeping; validate it without persisting document-derived data.
         _json_object(metadata_raw, "metadata")

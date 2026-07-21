@@ -33,6 +33,9 @@ export function parsePageRange(value: unknown): { page?: number; pageEnd?: numbe
   if (pages.length === 0) {
     return {};
   }
+  if (pages.length > 1 && (pages[1] < pages[0] || pages[1] - pages[0] > 1_000)) {
+    return {};
+  }
   return {
     page: pages[0],
     pageEnd: pages.length > 1 ? Math.max(pages[0], pages[1]) : pages[0],

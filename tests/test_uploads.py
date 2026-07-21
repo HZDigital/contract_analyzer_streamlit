@@ -93,6 +93,15 @@ def test_normalstunden_zip_preserves_the_validated_parent_as_supplier_hint() -> 
     assert files[0].supplier_hint == "supplier-a/january"
 
 
+def test_normalstunden_zip_rejects_duplicate_pdf_basenames() -> None:
+    with pytest.raises(HTTPException, match="duplicate PDF filenames"):
+        expand_normalstunden_archive(
+            _zip({"supplier-a/invoice.pdf": b"one", "supplier-b/Invoice.pdf": b"two"}),
+            Settings(),
+            include_subfolders=True,
+        )
+
+
 def test_validate_uploads_rejects_an_expanding_ooxml_document() -> None:
     settings = Settings.model_construct(
         max_file_bytes=1024,

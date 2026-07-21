@@ -51,6 +51,15 @@ def extract_normalstunden_from_bytes(
 ) -> dict[str, Any]:
     """Extract Normalstunden from browser-uploaded PDF bytes without filesystem access."""
     text = extract_text_from_pdf(pdf_bytes)
+    return extract_normalstunden_from_text(text, filename, supplier_hint)
+
+
+def extract_normalstunden_from_text(
+    text: str,
+    filename: str,
+    supplier_hint: str = "",
+) -> dict[str, Any]:
+    """Extract Normalstunden from text that has already been read from a PDF."""
     if not text.strip():
         return {
             "file_name": filename,
