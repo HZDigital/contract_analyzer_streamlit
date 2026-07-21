@@ -310,6 +310,9 @@ function App({ config }: { config: DeploymentConfig }) {
   const [selectedJobId, setSelectedJobId] = useState<string>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [desktopNavigation, setDesktopNavigation] = useState(
+    () => typeof window !== "undefined" && window.matchMedia?.("(min-width: 769px)").matches === true,
+  );
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [submissionPending, setSubmissionPending] = useState(false);
   const mobileMenuRef = useRef<HTMLButtonElement>(null);
@@ -325,6 +328,17 @@ function App({ config }: { config: DeploymentConfig }) {
       instance.setActiveAccount(account);
     }
   }, [account, instance]);
+
+  useEffect(() => {
+    if (!window.matchMedia) {
+      return;
+    }
+    const media = window.matchMedia("(min-width: 769px)");
+    const updateDesktopNavigation = (): void => setDesktopNavigation(media.matches);
+    updateDesktopNavigation();
+    media.addEventListener("change", updateDesktopNavigation);
+    return () => media.removeEventListener("change", updateDesktopNavigation);
+  }, []);
 
   useEffect(() => {
     if (account) {
@@ -421,6 +435,7 @@ function App({ config }: { config: DeploymentConfig }) {
 
   const activeModule = moduleById(selectedModuleId) ?? modules[0];
   const activeWorkflow = workflowById(selectedWorkflow) ?? workflowById(activeModule.defaultWorkflowId)!;
+  const navigationTitleVisible = desktopNavigation && !sidebarCollapsed;
 
   function openModule(moduleId: AnalysisModuleId): void {
     if (submissionPending) {
@@ -486,12 +501,24 @@ function App({ config }: { config: DeploymentConfig }) {
           >
             <SidebarToggleIcon />
           </button>
+          <button
+            className="mobile-close"
+            ref={mobileCloseRef}
+            type="button"
+            aria-label="Close navigation"
+            onClick={() => {
+              setMobileSidebarOpen(false);
+              window.requestAnimationFrame(() => mobileMenuRef.current?.focus());
+            }}
+          >
+            Close
+          </button>
         </div>
         <nav className="primary-nav" aria-label="Main navigation">
-          <button className={view === "dashboard" ? "nav-button active" : "nav-button"} type="button" title="Overview" disabled={submissionPending} onClick={() => openView("dashboard")}>
+          <button className={view === "dashboard" ? "nav-button active" : "nav-button"} type="button" title={navigationTitleVisible ? "Overview" : undefined} aria-label="Overview" disabled={submissionPending} onClick={() => openView("dashboard")}>
             <span className="nav-icon" aria-hidden="true">OV</span><span className="nav-label">Overview</span>
           </button>
-          <button className={view === "history" ? "nav-button active" : "nav-button"} type="button" title="Job history" disabled={submissionPending} onClick={() => openView("history")}>
+          <button className={view === "history" ? "nav-button active" : "nav-button"} type="button" title={navigationTitleVisible ? "Job history" : undefined} aria-label="Job history" disabled={submissionPending} onClick={() => openView("history")}>
             <span className="nav-icon" aria-hidden="true">JB</span><span className="nav-label">Job history</span>
           </button>
         </nav>
@@ -502,7 +529,8 @@ function App({ config }: { config: DeploymentConfig }) {
               className={view === "submit" && selectedModuleId === module.id ? "workflow-link active" : "workflow-link"}
               key={module.id}
               type="button"
-              title={module.title}
+              title={navigationTitleVisible ? module.title : undefined}
+              aria-label={module.title}
               disabled={submissionPending}
               onClick={() => openModule(module.id)}
             >
@@ -516,6 +544,7 @@ function App({ config }: { config: DeploymentConfig }) {
             <button
               className="account-trigger"
               type="button"
+              aria-label={`Account menu for ${account.name ?? account.username}`}
               aria-expanded={accountMenuOpen}
               aria-haspopup="menu"
               onClick={() => setAccountMenuOpen((open) => !open)}

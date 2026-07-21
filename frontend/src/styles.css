@@ -3491,6 +3491,14 @@ textarea:focus-visible {
   font-size: 0.53rem;
 }
 
+@media (min-width: 769px) {
+  .sidebar-collapsed .workflow-link .nav-label,
+  .sidebar-collapsed .workflow-link.active .nav-label,
+  .sidebar-collapsed .workflow-link:hover .nav-label {
+    display: none;
+  }
+}
+
 .account-panel {
   position: relative;
   display: block;
@@ -4157,7 +4165,25 @@ textarea:focus-visible {
   }
 
   .sidebar-header {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .sidebar-header .sidebar-toggle {
     display: none;
+  }
+
+  .sidebar-header .mobile-close {
+    display: grid;
+    min-height: 32px;
+    align-items: center;
+    padding: 0 9px;
+    border: 1px solid hsl(var(--sidebar-foreground) / 0.14);
+    border-radius: 9px;
+    background: hsl(var(--sidebar-foreground) / 0.06);
+    color: hsl(var(--sidebar-foreground) / 0.82);
+    font-size: 0.7rem;
+    font-weight: 700;
   }
 
   .sidebar-collapsed .account-panel {
