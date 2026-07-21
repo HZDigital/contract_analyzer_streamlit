@@ -107,9 +107,10 @@ function normalizeCustomization(value: unknown): JobCustomization | undefined {
     return undefined;
   }
   const instructions = typeof value.instructions === "string" ? value.instructions : "";
-  const hasStandardOutputFields = Array.isArray(value.standardOutputFields);
+  const standardOutputFieldsValue = value.standardOutputFields;
+  const hasStandardOutputFields = Array.isArray(standardOutputFieldsValue);
   const standardOutputFields = hasStandardOutputFields
-    ? value.standardOutputFields.filter((item): item is string => typeof item === "string")
+    ? standardOutputFieldsValue.filter((item): item is string => typeof item === "string")
     : undefined;
   const outputFields = Array.isArray(value.outputFields)
     ? value.outputFields.flatMap((item) => {
