@@ -11,7 +11,12 @@ import {
   type ChangeEvent,
   type FormEvent,
 } from "react";
-import { AnalyzerApi, AuthRedirectStartedError, errorMessage } from "./api";
+import { AnalyzerApi, errorMessage, isAuthenticationTransitionError } from "./api";
+import {
+  continueEmbeddedAuthentication,
+  isEmbeddedAnalyzer,
+  subscribeToEmbeddedAuthentication,
+} from "./auth-mode";
 import { getOrStartSsoAttempt } from "./auth-bootstrap";
 import { analyzerApiScopes } from "./config";
 import { deploymentName, logoUrl, type DeploymentConfig } from "./deployment-config";
@@ -207,7 +212,7 @@ function useJobs(instance: IPublicClientApplication, account: AccountInfo | unde
           shouldPoll = hasActiveJobs(nextJobs);
         }
       } catch (requestError) {
-        if (!cancelled && !(requestError instanceof AuthRedirectStartedError)) {
+        if (!cancelled && !isAuthenticationTransitionError(requestError)) {
           setError(errorMessage(requestError));
         }
       } finally {
@@ -275,7 +280,12 @@ function SignInScreen({ config }: { config: DeploymentConfig }) {
   async function signIn(): Promise<void> {
     setError(undefined);
     try {
-      await instance.loginRedirect({ scopes: analyzerApiScopes });
+      if (isEmbeddedAnalyzer()) {
+        const response = await instance.loginPopup({ scopes: analyzerApiScopes });
+        instance.setActiveAccount(response.account);
+      } else {
+        await instance.loginRedirect({ scopes: analyzerApiScopes });
+      }
     } catch (loginError) {
       setError(errorMessage(loginError));
     }
@@ -315,19 +325,26 @@ function App({ config }: { config: DeploymentConfig }) {
   );
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [submissionPending, setSubmissionPending] = useState(false);
+  const [embeddedAuthenticationRequired, setEmbeddedAuthenticationRequired] = useState(false);
+  const [embeddedAuthenticationError, setEmbeddedAuthenticationError] = useState<string>();
+  const [reauthenticating, setReauthenticating] = useState(false);
   const mobileMenuRef = useRef<HTMLButtonElement>(null);
   const mobileCloseRef = useRef<HTMLButtonElement>(null);
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const { jobs, loading, error, refresh } = useJobs(instance, account);
   const modules = analysisModules;
-  const query = typeof window === "undefined" ? undefined : new URLSearchParams(window.location.search);
-  const hideAccountPanel = query?.has("imbedded") === true || query?.has("embedded") === true;
+  const hideAccountPanel = isEmbeddedAnalyzer();
 
   useEffect(() => {
     if (account && !instance.getActiveAccount()) {
       instance.setActiveAccount(account);
     }
   }, [account, instance]);
+
+  useEffect(() => subscribeToEmbeddedAuthentication(() => {
+    setEmbeddedAuthenticationRequired(true);
+    setEmbeddedAuthenticationError(undefined);
+  }), []);
 
   useEffect(() => {
     if (!window.matchMedia) {
@@ -431,6 +448,19 @@ function App({ config }: { config: DeploymentConfig }) {
 
   if (!isAuthenticated || !account) {
     return <SignInScreen config={config} />;
+  }
+
+  async function continueWithMicrosoft(): Promise<void> {
+    setReauthenticating(true);
+    setEmbeddedAuthenticationError(undefined);
+    try {
+      await continueEmbeddedAuthentication(instance, account, analyzerApiScopes);
+      window.location.reload();
+    } catch (authenticationError) {
+      setEmbeddedAuthenticationError(errorMessage(authenticationError));
+    } finally {
+      setReauthenticating(false);
+    }
   }
 
   const activeModule = moduleById(selectedModuleId) ?? modules[0];
@@ -582,6 +612,14 @@ function App({ config }: { config: DeploymentConfig }) {
           </div>
           <button className="secondary-button" type="button" onClick={refresh}>Refresh jobs</button>
         </header>
+        {embeddedAuthenticationRequired ? (
+          <ErrorNotice
+            message={embeddedAuthenticationError ?? "Your Microsoft session needs to be refreshed before the analyzer can continue."}
+            onDismiss={() => void continueWithMicrosoft()}
+            actionLabel="Continue with Microsoft"
+            disabled={reauthenticating}
+          />
+        ) : null}
         {error ? <ErrorNotice message={error} onDismiss={refresh} /> : null}
         {view === "dashboard" ? <Dashboard modules={modules} jobs={jobs} loading={loading} onOpenModule={openModule} onOpenJob={openJob} /> : null}
         {view === "submit" ? (
@@ -671,11 +709,21 @@ function LoadingScreen() {
   );
 }
 
-function ErrorNotice({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+function ErrorNotice({
+  message,
+  onDismiss,
+  actionLabel = "Retry",
+  disabled = false,
+}: {
+  message: string;
+  onDismiss: () => void;
+  actionLabel?: string;
+  disabled?: boolean;
+}) {
   return (
     <div className="error-notice" role="alert">
       <span>{message}</span>
-      <button type="button" onClick={onDismiss}>Retry</button>
+      <button type="button" onClick={onDismiss} disabled={disabled}>{actionLabel}</button>
     </div>
   );
 }
@@ -857,7 +905,7 @@ function WorkflowSubmission({
       setFilesByInput({});
       onSubmitted(job);
     } catch (submissionError) {
-      if (!(submissionError instanceof AuthRedirectStartedError)) {
+      if (!isAuthenticationTransitionError(submissionError)) {
         setError(errorMessage(submissionError));
       }
     } finally {
@@ -1366,7 +1414,7 @@ function JobDetails({
           shouldPoll = !isTerminalJob(loadedJob.status);
         }
       } catch (detailError) {
-        if (!cancelled && !(detailError instanceof AuthRedirectStartedError)) {
+        if (!cancelled && !isAuthenticationTransitionError(detailError)) {
           setError(errorMessage(detailError));
         }
       } finally {
@@ -1406,7 +1454,7 @@ function JobDetails({
       anchor.remove();
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
     } catch (downloadRequestError) {
-      if (!(downloadRequestError instanceof AuthRedirectStartedError)) {
+      if (!isAuthenticationTransitionError(downloadRequestError)) {
         setDownloadError(errorMessage(downloadRequestError));
       }
     }
@@ -1425,7 +1473,7 @@ function JobDetails({
       anchor.remove();
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
     } catch (downloadRequestError) {
-      if (!(downloadRequestError instanceof AuthRedirectStartedError)) {
+      if (!isAuthenticationTransitionError(downloadRequestError)) {
         setDownloadError(errorMessage(downloadRequestError));
       }
     }
@@ -1440,7 +1488,7 @@ function JobDetails({
       await new AnalyzerApi(instance, account).deleteJob(job.id);
       onDeleted();
     } catch (deleteError) {
-      if (!(deleteError instanceof AuthRedirectStartedError)) {
+      if (!isAuthenticationTransitionError(deleteError)) {
         setError(errorMessage(deleteError));
       }
     } finally {
@@ -1667,7 +1715,7 @@ function QuestionPanel({
       setAnswer(answerText(response));
       setQuestion("");
     } catch (questionError) {
-      if (!(questionError instanceof AuthRedirectStartedError)) {
+      if (!isAuthenticationTransitionError(questionError)) {
         setError(errorMessage(questionError));
       }
     } finally {

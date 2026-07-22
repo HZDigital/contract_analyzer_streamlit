@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
+import { isAuthenticationTransitionError } from "./api";
 import type { ResultReference } from "./types";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -140,6 +141,9 @@ export default function SourcePreviewDrawer({
       setFile(source);
     }).catch((loadError: unknown) => {
       if (loadError instanceof DOMException && loadError.name === "AbortError") {
+        return;
+      }
+      if (isAuthenticationTransitionError(loadError)) {
         return;
       }
       setError("The source document could not be loaded. Download it or try again later.");

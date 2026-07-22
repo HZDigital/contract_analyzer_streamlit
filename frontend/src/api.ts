@@ -3,6 +3,11 @@ import {
   type AccountInfo,
   type IPublicClientApplication,
 } from "@azure/msal-browser";
+import {
+  EmbeddedAuthenticationRequiredError,
+  isEmbeddedAnalyzer,
+  requireEmbeddedAuthentication,
+} from "./auth-mode";
 import { analyzerApiScopes } from "./config";
 import { normalizeJob, normalizeJobs, normalizeSubmittedJob } from "./jobs";
 import type { AnalyzerJob, DownloadedArtifact, SubmitJobInput } from "./types";
@@ -25,6 +30,10 @@ export class AuthRedirectStartedError extends Error {
     super("Authentication redirect started.");
     this.name = "AuthRedirectStartedError";
   }
+}
+
+export function isAuthenticationTransitionError(error: unknown): boolean {
+  return error instanceof AuthRedirectStartedError || error instanceof EmbeddedAuthenticationRequiredError;
 }
 
 function isInteractionRequired(error: unknown): boolean {
@@ -108,6 +117,10 @@ export class AnalyzerApi {
       return response.accessToken;
     } catch (error) {
       if (isInteractionRequired(error)) {
+        if (isEmbeddedAnalyzer()) {
+          requireEmbeddedAuthentication();
+          throw new EmbeddedAuthenticationRequiredError();
+        }
         await this.msal.loginRedirect({
           account: this.account,
           scopes: analyzerApiScopes,
