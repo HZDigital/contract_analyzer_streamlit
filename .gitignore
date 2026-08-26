@@ -178,3 +178,6 @@ invoice_results_table*.csv
 results/
 frontend/node_modules/
 frontend/dist/
+
+# Local Streamlit credentials; never commit deployment or application secrets.
+.streamlit/secretsss.toml

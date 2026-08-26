@@ -1,4 +1,4 @@
-name: Trigger auto deployment for contractanalyzer
+name: HuZ File Analyser
 
 on:
   push:

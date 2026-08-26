@@ -1,49 +1,79 @@
-name: Trigger auto deployment for beka-file-analyser
+name: Beka File Analyser
 
-# When this action will be executed
 on:
-  # Automatically trigger it when detected changes in repo
   push:
-    branches: 
-      [ main ]
+    branches:
+      - main
     paths:
-    - '**'
-    - '.github/workflows/beka-file-analyser-AutoDeployTrigger-989df71a-af8d-4622-86e8-965e32366dfc.yml'
-
-  # Allow manual trigger 
-  workflow_dispatch:      
+      - "**"
+      - ".github/workflows/beka-file-analyser-AutoDeployTrigger-989df71a-af8d-4622-86e8-965e32366dfc.yml"
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    permissions: 
-      id-token: write #This is required for requesting the OIDC JWT Token
-      contents: read #Required when GH token is used to authenticate with private repo
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
-      - name: Checkout to the branch
-        uses: actions/checkout@v2
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Azure Login
+      - name: Azure login
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.BEKAFILEANALYSER_AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.BEKAFILEANALYSER_AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.BEKAFILEANALYSER_AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build and push container image to registry
+      - name: Apply analyzer Blob lifecycle policy
+        env:
+          AZURE_STORAGE_ACCOUNT_NAME: ${{ vars.BEKA_AZURE_STORAGE_ACCOUNT_NAME }}
+        run: |
+          test -n "$AZURE_STORAGE_ACCOUNT_NAME"
+          CURRENT_POLICY="$RUNNER_TEMP/current-storage-lifecycle-policy.json"
+          MERGED_POLICY="$RUNNER_TEMP/merged-storage-lifecycle-policy.json"
+          APPLIED_POLICY="$RUNNER_TEMP/applied-storage-lifecycle-policy.json"
+          if ! az storage account management-policy show \
+            --account-name "$AZURE_STORAGE_ACCOUNT_NAME" \
+            --resource-group RG_lizzy \
+            --query policy \
+            --output json > "$CURRENT_POLICY"; then
+            printf '{"rules": []}\n' > "$CURRENT_POLICY"
+          fi
+          python scripts/merge_storage_lifecycle_policy.py \
+            --existing "$CURRENT_POLICY" \
+            --required infra/storage-lifecycle-policy.json \
+            --output "$MERGED_POLICY"
+          az storage account management-policy create \
+            --account-name "$AZURE_STORAGE_ACCOUNT_NAME" \
+            --resource-group RG_lizzy \
+            --policy "@$MERGED_POLICY"
+          az storage account management-policy show \
+            --account-name "$AZURE_STORAGE_ACCOUNT_NAME" \
+            --resource-group RG_lizzy \
+            --query policy \
+            --output json > "$APPLIED_POLICY"
+          python scripts/merge_storage_lifecycle_policy.py \
+            --existing "$APPLIED_POLICY" \
+            --required infra/storage-lifecycle-policy.json \
+            --verify
+
+      - name: Build and deploy container image
         uses: azure/container-apps-deploy-action@v2
         with:
           appSourcePath: ${{ github.workspace }}
-          _dockerfilePathKey_: _dockerfilePath_
-          _targetLabelKey_: _targetLabel_
+          dockerfilePath: Dockerfile
           registryUrl: lizzycra.azurecr.io
           registryUsername: ${{ secrets.BEKAFILEANALYSER_REGISTRY_USERNAME }}
           registryPassword: ${{ secrets.BEKAFILEANALYSER_REGISTRY_PASSWORD }}
           containerAppName: beka-file-analyser
           resourceGroup: RG_lizzy
           imageToBuild: lizzycra.azurecr.io/beka-file-analyser:${{ github.sha }}
-          _buildArgumentsKey_: |
-            _buildArgumentsValues_
-
-
+          targetPort: 8080
+          ingress: external
+          buildArguments: >-
+            VITE_MSAL_CLIENT_ID=${{ vars.BEKA_VITE_MSAL_CLIENT_ID }}
+            VITE_MSAL_AUTHORITY=${{ vars.VITE_MSAL_AUTHORITY }}
+            VITE_DEPLOYMENT_CONFIGURATION=${{ vars.BEKA_VITE_DEPLOYMENT_CONFIGURATION }}
