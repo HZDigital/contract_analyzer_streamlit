@@ -75,5 +75,5 @@ jobs:
           ingress: external
           buildArguments: >-
             VITE_MSAL_CLIENT_ID=${{ vars.BEKA_VITE_MSAL_CLIENT_ID }}
-            VITE_MSAL_AUTHORITY=${{ vars.VITE_MSAL_AUTHORITY }}
+            VITE_MSAL_AUTHORITY=${{ vars.BEKA_VITE_MSAL_AUTHORITY }}
             VITE_DEPLOYMENT_CONFIGURATION=${{ vars.BEKA_VITE_DEPLOYMENT_CONFIGURATION }}
