@@ -1,0 +1,49 @@
+name: Trigger auto deployment for file-analyser-4c
+
+# When this action will be executed
+on:
+  # Automatically trigger it when detected changes in repo
+  push:
+    branches: 
+      [ main ]
+    paths:
+    - '**'
+    - '.github/workflows/file-analyser-4c-AutoDeployTrigger-1ec7e076-23c1-43fd-bf6d-49796b395654.yml'
+
+  # Allow manual trigger 
+  workflow_dispatch:      
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions: 
+      id-token: write #This is required for requesting the OIDC JWT Token
+      contents: read #Required when GH token is used to authenticate with private repo
+
+    steps:
+      - name: Checkout to the branch
+        uses: actions/checkout@v2
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.FILEANALYSER4C_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FILEANALYSER4C_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.FILEANALYSER4C_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push container image to registry
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: ${{ github.workspace }}
+          _dockerfilePathKey_: _dockerfilePath_
+          _targetLabelKey_: _targetLabel_
+          registryUrl: 4cgroupagcontainerregistry.azurecr.io
+          registryUsername: ${{ secrets.FILEANALYSER4C_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.FILEANALYSER4C_REGISTRY_PASSWORD }}
+          containerAppName: file-analyser-4c
+          resourceGroup: rg-mindscape
+          imageToBuild: 4cgroupagcontainerregistry.azurecr.io/file-analyser-4c:${{ github.sha }}
+          _buildArgumentsKey_: |
+            _buildArgumentsValues_
+
+
